@@ -48,6 +48,8 @@ yarn-error.log*
 .pnpm-debug.log*
 dist/
 dist-ssr/
+.eslintcache
+.parcel-cache
 
 # IDE / Editor Files
 .vscode/
@@ -58,13 +60,26 @@ dist-ssr/
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs & Temporary Files
 logs/
 *.log
+tmp/
+*.tmp
+*.bak
 
-# Database / Storage
+# Testing & Linting Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Database & Runtime Storage
 *.sqlite3
 *.db
 data/
 uploads/
-
+**/data/*.jsonl
+**/uploads/*
+qdrant_storage/
+.qdrant/
