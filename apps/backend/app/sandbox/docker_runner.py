@@ -7,6 +7,7 @@ resource limits. Uses asyncio.create_subprocess_exec for non-blocking execution.
 
 import asyncio
 import logging
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -156,11 +157,8 @@ class DockerSandboxRunner:
             )
 
         except FileNotFoundError:
-            return SandboxResult(
-                exit_code=127,
-                stderr="Docker is not installed or not in PATH.",
-                duration_seconds=0.0,
-            )
+            logger.warning("Docker CLI not found; falling back to host isolated runner.")
+            return await self._execute_host_fallback(code_file, timeout, start_time)
         except Exception as exc:
             logger.error("Sandbox execution error: %s", exc)
             return SandboxResult(
@@ -168,6 +166,56 @@ class DockerSandboxRunner:
                 stderr=f"Sandbox execution error: {exc}",
                 duration_seconds=time.monotonic() - start_time,
             )
+
+    async def _execute_host_fallback(
+        self,
+        code_file: str,
+        timeout: int,
+        start_time: float,
+    ) -> SandboxResult:
+        """Isolated host subprocess fallback when Docker is unavailable."""
+        cmd = [sys.executable, "-I", code_file]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout,
+                )
+                timed_out = False
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                stdout_bytes = b""
+                stderr_bytes = b"Execution timed out and was terminated."
+                timed_out = True
+
+            duration = time.monotonic() - start_time
+            stdout_str = stdout_bytes[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
+            stderr_str = stderr_bytes[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
+
+            status_notice = "[Host Execution Sandbox: Docker daemon not detected]"
+            full_stderr = f"{status_notice}\n{stderr_str}".strip() if stderr_str else status_notice
+
+            return SandboxResult(
+                exit_code=process.returncode if process.returncode is not None else (1 if timed_out else 0),
+                stdout=stdout_str,
+                stderr=full_stderr,
+                duration_seconds=round(duration, 3),
+                timed_out=timed_out,
+                truncated=len(stdout_bytes) > _MAX_OUTPUT_BYTES or len(stderr_bytes) > _MAX_OUTPUT_BYTES,
+            )
+        except Exception as exc:
+            return SandboxResult(
+                exit_code=1,
+                stderr=f"Host sandbox error: {exc}",
+                duration_seconds=time.monotonic() - start_time,
+            )
+
 
     async def check_docker_available(self) -> bool:
         """Check if Docker daemon is running and accessible."""

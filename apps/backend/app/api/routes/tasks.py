@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -186,16 +187,55 @@ async def _execute_task_pipeline(task_id: str, request: TaskRequest):
 
         elif pipeline_type == TaskType.SANDBOX:
             runner = DockerSandboxRunner()
-            code_to_run = request.parameters.get("code") or request.prompt
-            emit_event(StatusEvent(status="sandboxing", message="Spawning isolated Docker container...", task_id=task_id))
-            sandbox_res = await runner.run_code(code_to_run, language="python")
-            result_payload = {
+            explicit_code = request.parameters.get("code")
+
+            if not explicit_code:
+                emit_event(StatusEvent(status="generating_code", message="Synthesizing executable Python code...", task_id=task_id))
+                client = model_registry.get_client(role="coding", model_id=request.model)
+                gen_prompt = (
+                    f"Write a clean, self-contained Python 3 script that satisfies the following request:\n"
+                    f"{request.prompt}\n\n"
+                    f"Ensure you include print() calls demonstrating the output. Enclose your code in a ```python ... ``` block."
+                )
+                gen_resp = await client.chat(GenerationRequest(
+                    prompt=gen_prompt,
+                    temperature=0.2,
+                ))
+                llm_response_text = gen_resp.content or ""
+
+                code_match = re.search(r"```(?:python)?\s*\n(.*?)\n```", llm_response_text, re.DOTALL)
+                code_to_run = code_match.group(1).strip() if code_match else llm_response_text.strip()
+
+                emit_event(StatusEvent(status="sandboxing", message="Executing in isolated sandbox...", task_id=task_id))
+                sandbox_res = await runner.run_code(code_to_run, language="python")
+
+                stdout_display = sandbox_res.stdout.strip() if sandbox_res.stdout.strip() else "(No standard output)"
+                stderr_clean = "\n".join([line for line in sandbox_res.stderr.splitlines() if "not detected" not in line]).strip()
+                stderr_display = f"\nStderr:\n{stderr_clean}" if stderr_clean else ""
+
+                result_payload = (
+                    f"{llm_response_text}\n\n"
+                    f"### Execution Results:\n"
+                    f"```text\n{stdout_display}{stderr_display}\n```\n"
+                    f"*Exit code: {sandbox_res.exit_code} | Time: {sandbox_res.duration_seconds}s*"
+                )
+            else:
+                code_to_run = explicit_code
+                emit_event(StatusEvent(status="sandboxing", message="Executing code in isolated sandbox...", task_id=task_id))
+                sandbox_res = await runner.run_code(code_to_run, language="python")
+                result_payload = (
+                    f"### Sandbox Execution Results:\n"
+                    f"```text\n{sandbox_res.stdout or sandbox_res.stderr}\n```\n"
+                    f"*Exit code: {sandbox_res.exit_code} | Time: {sandbox_res.duration_seconds}s*"
+                )
+
+            artifacts = [{
+                "type": "sandbox_execution",
+                "code": code_to_run,
                 "stdout": sandbox_res.stdout,
                 "stderr": sandbox_res.stderr,
                 "exit_code": sandbox_res.exit_code,
-                "timed_out": sandbox_res.timed_out,
-            }
-            artifacts = [{"type": "sandbox_execution", **result_payload}]
+            }]
 
         else:
             # GENERAL / LLM reasoning

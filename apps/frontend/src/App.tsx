@@ -188,10 +188,30 @@ export default function App() {
               }
             } else if (eventType === 'completion') {
               setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMsgId ? { ...msg, status: 'completed' } : msg
-                )
+                prev.map((msg) => {
+                  if (msg.id !== assistantMsgId) return msg;
+                  let finalContent = msg.content;
+                  if (!finalContent && parsed.result) {
+                    if (typeof parsed.result === 'string') {
+                      finalContent = parsed.result;
+                    } else if (parsed.result.output) {
+                      finalContent = typeof parsed.result.output === 'string'
+                        ? parsed.result.output
+                        : JSON.stringify(parsed.result.output, null, 2);
+                    } else {
+                      finalContent = JSON.stringify(parsed.result, null, 2);
+                    }
+                  }
+                  return { ...msg, content: finalContent, status: 'completed' };
+                })
               );
+              if (parsed.result?.artifacts) {
+                for (const art of parsed.result.artifacts) {
+                  if (art.type === 'sandbox_execution') {
+                    setSandboxConsole((prev) => prev + `\n\n[SANDBOX EXECUTION]\nStdout:\n${art.stdout || '(none)'}\nStderr:\n${art.stderr || '(none)'}\nExit Code: ${art.exit_code}`);
+                  }
+                }
+              }
               fetchAuditLogs();
             } else if (eventType === 'error') {
               setMessages((prev) =>
