@@ -113,10 +113,11 @@ async def _execute_task_pipeline(task_id: str, request: TaskRequest):
 
     try:
         # Audit log the prompt
+        p_type_str = pipeline_type.value if hasattr(pipeline_type, "value") else str(pipeline_type)
         await audit_logger.log_model_call(
             prompt=request.prompt,
             model=request.model or settings.active_model_name,
-            task_type=pipeline_type.value,
+            task_type=p_type_str,
         )
 
         result_payload: Any = None
@@ -134,24 +135,39 @@ async def _execute_task_pipeline(task_id: str, request: TaskRequest):
 
         elif pipeline_type == TaskType.RAG:
             emit_event(StatusEvent(status="retrieving", message="Searching local knowledge base...", task_id=task_id))
-            retrieved = await hybrid_retriever.retrieve(request.prompt, top_k=5)
-            context_str = "\n\n".join(
-                [f"[Source: {c.source}, Score: {c.score}]\n{c.text}" for c in retrieved]
-            )
+            retrieved = []
+            try:
+                retrieved = await hybrid_retriever.retrieve(request.prompt, top_k=5)
+            except Exception as exc:
+                logger.warning("RAG retrieval failed (%s); proceeding with internal reasoning fallback.", exc)
+                emit_event(StatusEvent(
+                    status="retrieval_warning",
+                    message="Vector search unavailable; answering with internal reasoning.",
+                    task_id=task_id,
+                ))
 
-            prompt_with_context = f"Context from Sovereign Knowledge Base:\n{context_str}\n\nUser Question:\n{request.prompt}"
+            if retrieved:
+                context_str = "\n\n".join(
+                    [f"[Source: {c.source}, Score: {c.score}]\n{c.text}" for c in retrieved]
+                )
+                prompt_with_context = f"Context from Sovereign Knowledge Base:\n{context_str}\n\nUser Question:\n{request.prompt}"
+                sys_prompt = request.system_prompt or "Answer questions strictly based on the provided context."
+            else:
+                prompt_with_context = request.prompt
+                sys_prompt = request.system_prompt or "You are Sovereign AI Workbench. Answer the user question comprehensively."
+
             client = model_registry.get_client(role="reasoning", model_id=request.model)
 
             gen_req = GenerationRequest(
                 prompt=prompt_with_context,
-                system_prompt=request.system_prompt or "Answer questions strictly based on the provided context.",
+                system_prompt=sys_prompt,
                 temperature=request.temperature or 0.2,
             )
             response = await client.chat(gen_req)
             result_payload = response.content
             artifacts = [
                 {"type": "rag_sources", "sources": [c.model_dump() for c in retrieved]}
-            ]
+            ] if retrieved else []
 
         elif pipeline_type == TaskType.VISION:
             vision_client = VisionClient()
