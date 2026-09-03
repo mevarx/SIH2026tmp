@@ -1,14 +1,20 @@
+import logging
 from typing import Any, Dict, List, Optional
 import httpx
 
 from app.config import settings
 from app.models.local_client import LocalClient
 
+logger = logging.getLogger(__name__)
+
 
 class OllamaClient(LocalClient):
     """
     Ollama-specific client with support for native Ollama lifecycle methods (tags, pull)
     while inheriting the standard OpenAI-compatible chat and embedding execution.
+
+    Maintains a separate persistent HTTP client for native Ollama API calls (/api/tags,
+    /api/pull) to avoid socket leaks from repeatedly creating temporary clients.
     """
 
     def __init__(
@@ -32,24 +38,39 @@ class OllamaClient(LocalClient):
             timeout=timeout or settings.ollama_timeout_seconds,
         )
 
+        # Persistent client for native Ollama API (non-OpenAI endpoints).
+        # Uses a generous timeout for model pull operations (up to 10 minutes).
+        self._native_client = httpx.AsyncClient(
+            timeout=600.0,
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+        )
+
+    async def aclose(self) -> None:
+        """Closes both the OpenAI-compatible and native Ollama HTTP pools."""
+        await super().aclose()
+        if not self._native_client.is_closed:
+            await self._native_client.aclose()
+
     async def list_local_models(self) -> List[Dict[str, Any]]:
         """Query native Ollama /api/tags for installed models."""
         endpoint = f"{self.native_base_url}/api/tags"
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(endpoint)
-                res.raise_for_status()
-                data = res.json()
-                return data.get("models", [])
-        except Exception:
+            res = await self._native_client.get(endpoint, timeout=10.0)
+            res.raise_for_status()
+            data = res.json()
+            return data.get("models", [])
+        except Exception as exc:
+            logger.debug("Failed to list Ollama models at %s: %s", endpoint, exc)
             return []
 
     async def pull_model(self, model_name: str) -> bool:
         """Trigger model download in Ollama."""
         endpoint = f"{self.native_base_url}/api/pull"
         try:
-            async with httpx.AsyncClient(timeout=600.0) as client:
-                res = await client.post(endpoint, json={"name": model_name, "stream": False})
-                return res.status_code == 200
-        except Exception:
+            res = await self._native_client.post(
+                endpoint, json={"name": model_name, "stream": False}
+            )
+            return res.status_code == 200
+        except Exception as exc:
+            logger.error("Failed to pull model '%s' from %s: %s", model_name, endpoint, exc)
             return False

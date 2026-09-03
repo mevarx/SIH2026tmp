@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TaskType(str, Enum):
@@ -29,13 +29,19 @@ class TaskPriority(str, Enum):
     HIGH = "high"
 
 
+# Maximum number of keys allowed in arbitrary dict fields to prevent memory exhaustion
+_MAX_DICT_KEYS = 50
+_MAX_FILE_PATHS = 20
+
+
 class TaskRequest(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     prompt: str = Field(
         ...,
         min_length=1,
-        description="Prompt or primary instruction for the task",
+        max_length=50_000,
+        description="Prompt or primary instruction for the task (max 50,000 characters)",
         examples=["Analyze the uploaded financial report and highlight risk factors."]
     )
     task_type: TaskType = Field(
@@ -45,6 +51,7 @@ class TaskRequest(BaseModel):
     )
     model: Optional[str] = Field(
         default=None,
+        max_length=256,
         description="Specific model override to execute the task (e.g. 'ornith-1.5:9b-q4_k_m')",
         examples=["ornith-1.5:9b-q4_k_m"]
     )
@@ -56,6 +63,7 @@ class TaskRequest(BaseModel):
     )
     system_prompt: Optional[str] = Field(
         default=None,
+        max_length=10_000,
         description="Custom system prompt override"
     )
     context: Optional[Dict[str, Any]] = Field(
@@ -68,7 +76,8 @@ class TaskRequest(BaseModel):
     )
     file_paths: List[str] = Field(
         default_factory=list,
-        description="Referenced file paths or ingested document identifiers"
+        max_length=_MAX_FILE_PATHS,
+        description=f"Referenced file paths or ingested document identifiers (max {_MAX_FILE_PATHS})"
     )
     stream: bool = Field(
         default=False,
@@ -86,6 +95,27 @@ class TaskRequest(BaseModel):
         default_factory=dict,
         description="User or caller provided metadata"
     )
+
+    @field_validator("context", mode="before")
+    @classmethod
+    def _cap_context_size(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if v is not None and isinstance(v, dict) and len(v) > _MAX_DICT_KEYS:
+            raise ValueError(f"context dict exceeds maximum of {_MAX_DICT_KEYS} keys")
+        return v
+
+    @field_validator("parameters", mode="before")
+    @classmethod
+    def _cap_parameters_size(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if isinstance(v, dict) and len(v) > _MAX_DICT_KEYS:
+            raise ValueError(f"parameters dict exceeds maximum of {_MAX_DICT_KEYS} keys")
+        return v
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _cap_metadata_size(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if isinstance(v, dict) and len(v) > _MAX_DICT_KEYS:
+            raise ValueError(f"metadata dict exceeds maximum of {_MAX_DICT_KEYS} keys")
+        return v
 
 
 # Alias for compatibility with common controller conventions

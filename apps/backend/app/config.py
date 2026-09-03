@@ -61,10 +61,14 @@ class Settings(BaseSettings):
 
     # Sandbox & Security Limits
     sandbox_timeout_seconds: int = 30
-    sandbox_max_memory_mb: int = 512
+    sandbox_max_memory_mb: int = 256
     sandbox_network_access: bool = False
     secret_key: str = "insecure-default-change-me-in-production"
     allowed_origins: str = "http://localhost:3000,http://localhost:5173"
+
+    # File-backed persistence paths
+    audit_log_path: str = "data/audit.jsonl"
+    task_store_path: str = "data/tasks.jsonl"
 
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env", "../../.env"),

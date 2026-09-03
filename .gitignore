@@ -65,3 +65,6 @@ logs/
 # Database / Storage
 *.sqlite3
 *.db
+data/
+uploads/
+

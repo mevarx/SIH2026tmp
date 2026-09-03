@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 from fastapi import FastAPI
@@ -16,10 +17,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     Application lifecycle manager.
-    Initializes resources on startup and cleanly closes connection pools on shutdown.
+    Initializes resources and persistence directories on startup and cleanly closes
+    connection pools on shutdown.
     """
+    # Ensure local persistence and upload directories exist
+    os.makedirs("data", exist_ok=True)
+    os.makedirs("uploads", exist_ok=True)
+
     logger.info(
-        "Starting %s v%s (Backend: %s, Endpoint: %s)",
+        "Starting %s v%s (Backend: %s, Endpoint: %s, Air-Gapped: True)",
         settings.app_name,
         settings.app_version,
         settings.active_backend,

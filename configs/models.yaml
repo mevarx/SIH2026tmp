@@ -37,7 +37,7 @@ serving_backends:
     openai_base_url: "http://localhost:8000/v1"
     timeout_seconds: 120.0
     default_model: "ornith-ai/Ornith-1.5-9B"
-    launch_command: 'vllm serve "ornith-ai/Ornith-1.5-9B" --port 8000 --enable-auto-tool-choice --tool-call-parser qwen3_xml --reasoning-parser qwen3 --max-model-len 32768'
+    launch_command: 'vllm serve "ornith-ai/Ornith-1.5-9B" --port 8000 --enable-auto-tool-choice --tool-call-parser qwen3_xml --reasoning-parser qwen3 --max-model-len 32768 --gpu-memory-utilization 0.90 --enable-chunked-prefill'
 
 # Vector Database (Qdrant)
 qdrant:
@@ -138,6 +138,6 @@ vision_pipelines:
 sandbox:
   runtime: "docker"
   timeout_seconds: 30
-  max_memory_mb: 512
+  max_memory_mb: 256
   cpu_limit: 1.0
   network_disabled: true
