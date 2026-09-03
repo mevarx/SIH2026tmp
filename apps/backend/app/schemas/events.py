@@ -33,6 +33,15 @@ class StreamEvent(BaseModel):
 
     def to_sse(self) -> str:
         """Serialize into SSE format `event: ...\ndata: ...\n\n`."""
+        def _json_default(obj: Any) -> Any:
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump()
+            if hasattr(obj, "dict"):
+                return obj.dict()
+            if hasattr(obj, "isoformat"):
+                return obj.isoformat()
+            return str(obj)
+
         payload = {
             "event_id": self.event_id,
             "event_type": self.event_type.value,
@@ -40,7 +49,8 @@ class StreamEvent(BaseModel):
             "task_id": self.task_id,
             **self.data,
         }
-        return f"event: {self.event_type.value}\ndata: {json.dumps(payload)}\n\n"
+        return f"event: {self.event_type.value}\ndata: {json.dumps(payload, default=_json_default)}\n\n"
+
 
 
 class TokenEvent(StreamEvent):

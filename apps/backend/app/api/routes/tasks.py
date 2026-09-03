@@ -303,7 +303,8 @@ async def stream_task_events(task_id: str):
     async def event_generator() -> AsyncIterator[str]:
         # If task already completed before stream connected, emit completion directly
         if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
-            yield CompletionEvent(result=task.result or task.error, task_id=task_id).to_sse()
+            res_val = task.result.model_dump() if hasattr(task.result, "model_dump") else (task.result or task.error)
+            yield CompletionEvent(result=res_val, task_id=task_id).to_sse()
             return
 
         while True:
