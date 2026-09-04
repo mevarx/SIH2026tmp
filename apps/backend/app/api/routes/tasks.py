@@ -15,12 +15,13 @@ import logging
 import os
 import re
 import time
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import aiofiles
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from app.agent.graph import agent_graph
@@ -46,6 +47,7 @@ from app.schemas.tasks import (
     TaskType,
 )
 from app.security.audit import audit_logger
+from app.vision.ocr import ocr_document
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +126,40 @@ async def _execute_task_pipeline(task_id: str, request: TaskRequest):
         result_payload: Any = None
         artifacts: List[Dict[str, Any]] = []
 
+        # Process document attachments and run local OCR if provided
+        effective_prompt = request.prompt
+        if request.file_paths:
+            emit_event(StatusEvent(status="reading_documents", message="Processing document attachments & running OCR...", task_id=task_id))
+            doc_excerpts = []
+            for fp in request.file_paths:
+                p = Path(fp)
+                if p.is_file():
+                    try:
+                        suffix = p.suffix.lower()
+                        if suffix in (".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"):
+                            d_text = await ocr_document(str(p))
+                        elif suffix in (".txt", ".md", ".csv", ".json"):
+                            d_text = p.read_text(encoding="utf-8", errors="replace")
+                        elif suffix in (".docx", ".doc"):
+                            from docx import Document
+                            doc = Document(str(p))
+                            d_text = "\n\n".join(para.text for para in doc.paragraphs if para.text.strip())
+                        else:
+                            d_text = ""
+                        if d_text:
+                            doc_excerpts.append(f"--- Document: {p.name} ---\n{d_text[:15000]}")
+                    except Exception as e:
+                        logger.warning("Could not read attached file %s: %s", fp, e)
+            if doc_excerpts:
+                effective_prompt = (
+                    f"Attached Document(s) Content (OCR Extracted):\n" + "\n\n".join(doc_excerpts) +
+                    f"\n\nUser Question/Instruction:\n{request.prompt}"
+                )
+
         if pipeline_type == TaskType.AGENT:
             state = AgentState(
                 task_id=task_id,
-                prompt=request.prompt,
+                prompt=effective_prompt,
                 max_steps=6,
             )
             completed_state = await agent_graph.run(state)
@@ -241,7 +273,7 @@ async def _execute_task_pipeline(task_id: str, request: TaskRequest):
             # GENERAL / LLM reasoning
             client = model_registry.get_client(role="reasoning", model_id=request.model)
             gen_req = GenerationRequest(
-                prompt=request.prompt,
+                prompt=effective_prompt,
                 system_prompt=request.system_prompt,
                 temperature=request.temperature or 0.7,
             )
@@ -310,6 +342,51 @@ async def list_tasks(
     # Return newest first
     tasks.sort(key=lambda t: t.created_at, reverse=True)
     return TaskListResponse(tasks=tasks[:limit], total=len(tasks))
+
+
+@router.post("/upload", response_model=APIResponse[Dict[str, Any]])
+async def upload_task_document(file: UploadFile = File(...)) -> APIResponse[Dict[str, Any]]:
+    """
+    Direct in-chat document/image upload for local OCR & sovereign analysis.
+    Saves to data/uploads/ and performs automatic text/OCR extraction without external network.
+    """
+    upload_dir = Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = file.filename or "attachment"
+    safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", filename)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    target_path = upload_dir / f"{timestamp}_{safe_name}"
+
+    try:
+        with open(target_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        extracted_text = ""
+        ocr_applied = False
+        suffix = target_path.suffix.lower()
+
+        if suffix in (".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"):
+            extracted_text = await ocr_document(str(target_path))
+            ocr_applied = True
+        elif suffix in (".txt", ".md", ".csv", ".json"):
+            extracted_text = target_path.read_text(encoding="utf-8", errors="replace")
+        elif suffix in (".docx", ".doc"):
+            from docx import Document
+            doc = Document(str(target_path))
+            extracted_text = "\n\n".join(para.text for para in doc.paragraphs if para.text.strip())
+
+        return APIResponse.ok(data={
+            "filename": filename,
+            "file_path": str(target_path).replace("\\", "/"),
+            "file_size": target_path.stat().st_size,
+            "extracted_text": extracted_text[:2000],
+            "char_count": len(extracted_text),
+            "ocr_applied": ocr_applied,
+        })
+    except Exception as exc:
+        logger.error("Upload/OCR processing failed for %s: %s", filename, exc)
+        return APIResponse.fail(error=f"Upload failed: {str(exc)}")
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
