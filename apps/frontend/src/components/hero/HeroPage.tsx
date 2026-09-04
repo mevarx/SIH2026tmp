@@ -1,104 +1,111 @@
-import { ArrowRight, Database, Layers, Terminal, Shield } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { HeroBackground } from './HeroBackground';
+import { Shield, Database, Layers, Terminal } from 'lucide-react';
+import Hero1 from '../ui/hero-1';
 
 interface HeroPageProps {
   onEnter: () => void;
 }
 
 export function HeroPage({ onEnter }: HeroPageProps) {
+  const socialLinks = [
+    { label: "Problem SIH26117", href: "https://github.com/rav-builds/DEMO-SIH26117" },
+    { label: "Architecture Spec", href: "#capabilities" },
+    { label: "Zero-Trust Audit", href: "#capabilities" },
+  ];
+
   return (
-    <div className="relative min-h-screen w-full flex flex-col justify-between overflow-y-auto bg-[var(--bg-base)] text-[var(--text-primary)]">
-      {/* Isolated swappable hero background */}
-      <HeroBackground variant="network-grid" />
-
-      {/* Main Centered Hero Viewport */}
-      <div className="relative z-10 mx-auto w-full max-w-4xl px-6 pt-24 pb-16 flex flex-col items-center text-center">
-        {/* Headline + One-line subhead per PRD Section 3.2 (No eyebrow label, no tracked-out caps) */}
-        <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-[var(--text-primary)] max-w-3xl leading-[1.12]">
-          Sovereign intelligence for high-stakes environments.
-        </h1>
-
-        <p className="mt-6 text-base sm:text-lg text-[var(--text-muted)] max-w-2xl font-normal leading-relaxed">
-          Local reasoning, hybrid document retrieval, and sandboxed execution running entirely inside your perimeter.
-        </p>
-
-        {/* Primary CTA + Single Live Credibility Stat */}
-        <div className="mt-10 flex flex-col items-center gap-8">
-          <Button
-            variant="accent"
-            size="lg"
-            onClick={onEnter}
-            className="px-8 py-3.5 text-base font-semibold rounded-[var(--radius-lg)] shadow-lg hover:shadow-[0_0_30px_rgba(76,201,192,0.35)] transition-all cursor-pointer"
-          >
-            <span>Enter Workbench</span>
-            <ArrowRight size={18} />
-          </Button>
-
-          {/* Single live credibility stat — large counter, not a badge wall */}
-          <div className="flex flex-col items-center">
-            <span className="text-3xl sm:text-4xl font-bold tracking-tight text-[var(--text-primary)] font-mono">
-              0
-            </span>
-            <span className="text-xs text-[var(--text-muted)] font-medium mt-1">
-              outbound requests, always
+    <div className="relative min-h-screen w-full flex flex-col bg-[#06060c] text-white">
+      {/* ── Watermelon Hero 1 Component ── */}
+      <Hero1
+        brand={
+          <div className="flex items-center gap-2.5">
+            <div className="flex items-center justify-center w-7 h-7 rounded-md bg-[var(--accent)] text-black">
+              <Shield size={16} />
+            </div>
+            <span className="font-semibold text-lg text-white tracking-tight">Sovereign AI</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/70 font-mono">
+              SIH-26117
             </span>
           </div>
-        </div>
-      </div>
+        }
+        headline={
+          <>
+            Sovereign intelligence for
+            <br />
+            high-stakes environments.
+          </>
+        }
+        ctaLabel="Enter Workbench"
+        onCtaClick={onEnter}
+        signInLabel="0 Outbound Leaks"
+        onSignInClick={onEnter}
+        description={`Local reasoning, hybrid document retrieval, and sandboxed code execution\nrunning strictly inside your perimeter with 0 outbound requests, always.`}
+        socialLinks={socialLinks}
+      />
 
-      {/* Below the fold: 4 capability entries without card boxes, whitespace separated per PRD Section 3.2 */}
-      <div className="relative z-10 w-full max-w-5xl mx-auto px-6 pb-20 pt-8">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-10 text-left">
+      {/* ── Below the Fold: 4 Capabilities List ── */}
+      <section id="capabilities" className="relative z-10 w-full max-w-6xl mx-auto px-6 lg:px-20 py-24 border-t border-white/5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-12 text-left">
           <div className="flex flex-col">
-            <div className="text-[var(--text-muted)] mb-3">
-              <Database size={20} strokeWidth={1.5} />
+            <div className="text-[var(--accent)] mb-3.5">
+              <Database size={22} strokeWidth={1.5} />
             </div>
-            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1.5">
-              Hybrid Retrieval
+            <h2 className="text-sm font-semibold text-white mb-1.5">
+              Hybrid Document RAG
             </h2>
-            <p className="text-xs text-[var(--text-muted)] leading-relaxed font-normal">
-              Combines dense vectors and BM25 keywords over sensitive local documents.
+            <p className="text-xs text-white/60 leading-relaxed font-normal">
+              Combines Qdrant dense vector embeddings and BM25Okapi keyword search over local classified documents.
             </p>
           </div>
 
           <div className="flex flex-col">
-            <div className="text-[var(--text-muted)] mb-3">
-              <Layers size={20} strokeWidth={1.5} />
+            <div className="text-[var(--accent)] mb-3.5">
+              <Layers size={22} strokeWidth={1.5} />
             </div>
-            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1.5">
-              Autonomous Agency
+            <h2 className="text-sm font-semibold text-white mb-1.5">
+              Autonomous State Graph
             </h2>
-            <p className="text-xs text-[var(--text-muted)] leading-relaxed font-normal">
-              Multi-step reasoning loops with deterministic tool checks and self-correction.
+            <p className="text-xs text-white/60 leading-relaxed font-normal">
+              Stateful multi-step reasoning cycles with deterministic local tool execution and zero telemetry.
             </p>
           </div>
 
           <div className="flex flex-col">
-            <div className="text-[var(--text-muted)] mb-3">
-              <Terminal size={20} strokeWidth={1.5} />
+            <div className="text-[var(--accent)] mb-3.5">
+              <Terminal size={22} strokeWidth={1.5} />
             </div>
-            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1.5">
+            <h2 className="text-sm font-semibold text-white mb-1.5">
               Docker Sandbox Jail
             </h2>
-            <p className="text-xs text-[var(--text-muted)] leading-relaxed font-normal">
-              Executes code inside hardware-constrained containers with zero network access.
+            <p className="text-xs text-white/60 leading-relaxed font-normal">
+              Executes untrusted code in hardware-constrained containers with strict --network=none enforcement.
             </p>
           </div>
 
           <div className="flex flex-col">
-            <div className="text-[var(--text-muted)] mb-3">
-              <Shield size={20} strokeWidth={1.5} />
+            <div className="text-[var(--accent)] mb-3.5">
+              <Shield size={22} strokeWidth={1.5} />
             </div>
-            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1.5">
+            <h2 className="text-sm font-semibold text-white mb-1.5">
               Cryptographic Audit
             </h2>
-            <p className="text-xs text-[var(--text-muted)] leading-relaxed font-normal">
-              Immutable SHA-256 event log guaranteeing transparent chain of custody.
+            <p className="text-xs text-white/60 leading-relaxed font-normal">
+              Immutable SHA-256 JSONL audit logger maintaining an unalterable chain of custody for every action.
             </p>
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* ── Bottom Baseline Footer ── */}
+      <footer className="relative z-10 w-full max-w-6xl mx-auto px-6 lg:px-20 py-8 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-white/40">
+        <div className="flex items-center gap-2">
+          <span>Sovereign AI Workbench</span>
+          <span>•</span>
+          <span className="font-mono">SIH26117</span>
+        </div>
+        <div>
+          Zero-Trust Local Execution & Zero Egress Verification
+        </div>
+      </footer>
     </div>
   );
 }

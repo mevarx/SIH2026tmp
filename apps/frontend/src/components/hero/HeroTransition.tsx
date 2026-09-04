@@ -19,9 +19,9 @@ export function HeroTransition({
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[var(--bg-base)]">
-      {/* Hero Layer */}
+      {/* Hero Layer with smooth scrolling */}
       <div
-        className={`absolute inset-0 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+        className={`absolute inset-0 overflow-y-auto overflow-x-hidden scroll-smooth transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
           isTransitioning
             ? 'opacity-0 scale-95 pointer-events-none'
             : 'opacity-100 scale-100'
