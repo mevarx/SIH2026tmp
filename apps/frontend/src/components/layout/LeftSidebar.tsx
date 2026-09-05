@@ -11,7 +11,7 @@ import {
 import { Tooltip } from '../ui/Tooltip';
 import { IngestedDoc } from '../../types/knowledge';
 
-interface SessionItem {
+export interface SessionItem {
   id: string;
   title: string;
   timestamp: string;
@@ -19,27 +19,27 @@ interface SessionItem {
 }
 
 interface LeftSidebarProps {
+  sessions: SessionItem[];
   currentSessionId: string;
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
+  onDeleteSession: (id: string) => void;
+  onClearAllSessions: () => void;
 }
 
 export function LeftSidebar({
+  sessions,
   currentSessionId,
   onSelectSession,
   onNewSession,
+  onDeleteSession,
+  onClearAllSessions,
 }: LeftSidebarProps) {
   // Persist sidebar state in localStorage per PRD Section 4.2
   const [isExpanded, setIsExpanded] = useState<boolean>(() => {
     const saved = localStorage.getItem('sovereign_sidebar_expanded');
     return saved !== null ? saved === 'true' : true;
   });
-
-  const [sessions] = useState<SessionItem[]>([
-    { id: 'sess-1', title: 'Zero-Egress Security Review', timestamp: '10m ago', mode: 'agent' },
-    { id: 'sess-2', title: 'Defense Procurement RAG', timestamp: '1h ago', mode: 'rag' },
-    { id: 'sess-3', title: 'Container Sandbox Jail Test', timestamp: 'Yesterday', mode: 'sandbox' },
-  ]);
 
   const [documents, setDocuments] = useState<IngestedDoc[]>([
     {
@@ -145,9 +145,21 @@ export function LeftSidebar({
       {/* Middle Section: Session History */}
       <div className="flex-1 overflow-y-auto px-2 py-3 flex flex-col gap-1">
         {isExpanded && (
-          <span className="text-[11px] font-medium text-[var(--text-muted)] px-2 mb-1">
-            Session History
-          </span>
+          <div className="flex items-center justify-between px-2 mb-1">
+            <span className="text-[11px] font-medium text-[var(--text-muted)]">
+              Session History
+            </span>
+            {sessions.length > 0 && (
+              <button
+                type="button"
+                onClick={onClearAllSessions}
+                title="Clear all session history"
+                className="text-[10px] text-[var(--text-muted)] hover:text-[var(--status-error)] transition-colors cursor-pointer px-1 py-0.5 rounded hover:bg-[var(--border-subtle)]"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
         )}
 
         {sessions.length === 0 ? (
@@ -161,37 +173,63 @@ export function LeftSidebar({
             const isSelected = sess.id === currentSessionId;
             if (!isExpanded) {
               return (
-                <Tooltip key={sess.id} content={`${sess.title} (${sess.timestamp})`} side="right">
+                <div key={sess.id} className="relative group w-full">
+                  <Tooltip content={`${sess.title} (${sess.timestamp})`} side="right">
+                    <button
+                      onClick={() => onSelectSession(sess.id)}
+                      className={`w-full flex items-center justify-center h-8 rounded-[var(--radius-sm)] transition-colors cursor-pointer ${
+                        isSelected
+                          ? 'bg-[var(--border-subtle)] text-[var(--text-primary)]'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--border-subtle)]'
+                      }`}
+                    >
+                      <span className="h-2 w-2 rounded-full bg-[var(--accent)]" />
+                    </button>
+                  </Tooltip>
                   <button
-                    onClick={() => onSelectSession(sess.id)}
-                    className={`w-full flex items-center justify-center h-8 rounded-[var(--radius-sm)] transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-[var(--border-subtle)] text-[var(--text-primary)]'
-                        : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--border-subtle)]'
-                    }`}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDeleteSession(sess.id);
+                    }}
+                    title="Delete session"
+                    className="absolute right-0 top-0 h-4 w-4 rounded-full bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--status-error)] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer z-10"
                   >
-                    <span className="h-2 w-2 rounded-full bg-[var(--accent)]" />
+                    <Trash2 size={9} />
                   </button>
-                </Tooltip>
+                </div>
               );
             }
 
             return (
-              <button
+              <div
                 key={sess.id}
-                onClick={() => onSelectSession(sess.id)}
-                className={`w-full flex flex-col text-left px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors cursor-pointer group ${
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group cursor-pointer ${
                   isSelected
                     ? 'bg-[var(--border-subtle)] text-[var(--text-primary)]'
                     : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--border-subtle)]'
                 }`}
+                onClick={() => onSelectSession(sess.id)}
               >
-                <span className="text-xs font-medium truncate">{sess.title}</span>
-                <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] mt-0.5">
-                  <span className="capitalize">{sess.mode}</span>
-                  <span>{sess.timestamp}</span>
+                <div className="flex flex-col flex-1 min-w-0 pr-2">
+                  <span className="text-xs font-medium truncate">{sess.title}</span>
+                  <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] mt-0.5">
+                    <span className="capitalize">{sess.mode}</span>
+                    <span>{sess.timestamp}</span>
+                  </div>
                 </div>
-              </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteSession(sess.id);
+                  }}
+                  title="Delete session"
+                  className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--status-error)] hover:bg-[var(--bg-surface)] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shrink-0"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
             );
           })
         )}

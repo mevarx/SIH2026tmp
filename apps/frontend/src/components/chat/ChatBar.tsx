@@ -139,6 +139,7 @@ export function ChatBar({
               {/* Session Settings Popover Gear icon per PRD Section 4.5 */}
               <Popover
                 align="start"
+                side="top"
                 className="w-64 p-3"
                 trigger={
                   <button

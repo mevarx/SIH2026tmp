@@ -15,9 +15,16 @@ interface DropdownMenuProps {
   items: DropdownItem[];
   className?: string;
   align?: 'start' | 'end';
+  side?: 'top' | 'bottom';
 }
 
-export function DropdownMenu({ trigger, items, className, align = 'start' }: DropdownMenuProps) {
+export function DropdownMenu({
+  trigger,
+  items,
+  className,
+  align = 'start',
+  side = 'bottom',
+}: DropdownMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -42,7 +49,8 @@ export function DropdownMenu({ trigger, items, className, align = 'start' }: Dro
       {isOpen && (
         <div
           className={cn(
-            'absolute z-50 mt-2 min-w-[180px] rounded-[var(--radius-md)] bg-[var(--bg-surface)] p-1.5 shadow-2xl border border-[var(--border-medium)]',
+            'absolute z-50 min-w-[180px] rounded-[var(--radius-md)] bg-[var(--bg-surface)] p-1.5 shadow-2xl border border-[var(--border-medium)]',
+            side === 'top' ? 'bottom-full mb-2' : 'top-full mt-2',
             align === 'end' ? 'right-0' : 'left-0',
             className
           )}

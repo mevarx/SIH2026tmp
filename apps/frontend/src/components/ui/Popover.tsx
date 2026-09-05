@@ -6,9 +6,16 @@ interface PopoverProps {
   children: React.ReactNode;
   className?: string;
   align?: 'start' | 'center' | 'end';
+  side?: 'top' | 'bottom';
 }
 
-export function Popover({ trigger, children, className, align = 'start' }: PopoverProps) {
+export function Popover({
+  trigger,
+  children,
+  className,
+  align = 'start',
+  side = 'bottom',
+}: PopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -39,7 +46,8 @@ export function Popover({ trigger, children, className, align = 'start' }: Popov
       {isOpen && (
         <div
           className={cn(
-            'absolute z-50 mt-2 min-w-[240px] rounded-[var(--radius-lg)] bg-[var(--bg-surface)] p-3 text-[var(--text-primary)] shadow-2xl border border-[var(--border-medium)] animate-in fade-in-50 zoom-in-95',
+            'absolute z-50 min-w-[240px] rounded-[var(--radius-lg)] bg-[var(--bg-surface)] p-3 text-[var(--text-primary)] shadow-2xl border border-[var(--border-medium)] animate-in fade-in-50 zoom-in-95',
+            side === 'top' ? 'bottom-full mb-2' : 'top-full mt-2',
             alignStyles[align],
             className
           )}
