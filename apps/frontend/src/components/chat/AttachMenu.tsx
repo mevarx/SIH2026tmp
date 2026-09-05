@@ -117,6 +117,7 @@ export function AttachMenu({ onAttachFile, isUploading = false }: AttachMenuProp
         }
         items={items}
         align="start"
+        side="top"
       />
     </>
   );
