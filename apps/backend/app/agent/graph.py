@@ -256,33 +256,30 @@ class AgentGraph:
                 ))
                 return state
 
-            # Standardize tool calls and append assistant message ONCE (avoids context pollution)
-            standardized_calls = []
-            for idx, call in enumerate(tool_calls_to_execute):
-                call_id = call.get("id") or f"call_{state.current_step}_{idx}"
-                call["id"] = call_id
-                standardized_calls.append({
-                    "id": call_id,
-                    "type": "function",
+            # 1. Append a SINGLE assistant message containing ALL tool calls
+            assistant_tool_calls = []
+            for i, call in enumerate(tool_calls_to_execute):
+                tool_id = call.get("id") or f"call_{state.current_step}_{i}"
+                call["id"] = tool_id
+                assistant_tool_calls.append({
+                    "id": tool_id, 
+                    "type": "function", 
                     "function": {
-                        "name": call.get("name", ""),
-                        "arguments": json.dumps(call.get("parameters", {})),
-                    },
+                        "name": call.get("name"), 
+                        "arguments": json.dumps(call.get("parameters"))
+                    }
                 })
 
-            # Append the single assistant message with all tool calls
             state.messages.append(ChatMessage(
                 role="assistant",
-                content=raw_text if raw_text.strip() else None,
-                tool_calls=standardized_calls,
+                content=raw_text or "Executing tools...",
+                tool_calls=assistant_tool_calls if assistant_tool_calls else None,
             ))
 
-            # Execute tool calls and append individual tool response messages
+            # 2. Execute tools and append their individual results
             for call in tool_calls_to_execute:
                 tool_name = call.get("name", "")
                 params = call.get("parameters", {})
-                call_id = call.get("id")
-
                 tool_result = await self._execute_tool(tool_name, params)
 
                 state.add_step_result(StepResult(
@@ -294,10 +291,11 @@ class AgentGraph:
                     tool_output=tool_result,
                 ))
 
+                tool_id = call.get("id") or f"call_{state.current_step}_{tool_calls_to_execute.index(call)}"
                 state.messages.append(ChatMessage(
                     role="tool",
                     content=json.dumps(tool_result) if not isinstance(tool_result, str) else tool_result,
-                    tool_call_id=call_id,
+                    tool_call_id=tool_id,
                 ))
 
         # Max steps reached
@@ -397,32 +395,31 @@ class AgentGraph:
                 yield CompletionEvent(result={"output": clean_output, "steps": [s.model_dump() for s in state.step_results]}, task_id=state.task_id)
                 return
 
-            # Standardize tool calls and append assistant message ONCE (avoids context pollution)
-            standardized_calls = []
-            for idx, call in enumerate(tool_calls_to_execute):
-                call_id = call.get("id") or f"call_{state.current_step}_{idx}"
-                call["id"] = call_id
-                standardized_calls.append({
-                    "id": call_id,
-                    "type": "function",
+            # 1. Append a SINGLE assistant message containing ALL tool calls
+            assistant_tool_calls = []
+            for i, call in enumerate(tool_calls_to_execute):
+                tool_id = call.get("id") or f"call_{state.current_step}_{i}"
+                call["id"] = tool_id
+                assistant_tool_calls.append({
+                    "id": tool_id, 
+                    "type": "function", 
                     "function": {
-                        "name": call.get("name", ""),
-                        "arguments": json.dumps(call.get("parameters", {})),
-                    },
+                        "name": call.get("name"), 
+                        "arguments": json.dumps(call.get("parameters"))
+                    }
                 })
 
-            # Append the single assistant message with all tool calls
             state.messages.append(ChatMessage(
                 role="assistant",
-                content=raw_text if raw_text.strip() else None,
-                tool_calls=standardized_calls,
+                content=raw_text or "Executing tools...",
+                tool_calls=assistant_tool_calls if assistant_tool_calls else None,
             ))
 
-            # Execute tool calls and append individual tool response messages
+            # 2. Execute tools and append their individual results
             for call in tool_calls_to_execute:
                 tool_name = call.get("name", "")
                 params = call.get("parameters", {})
-                call_id = call.get("id")
+                tool_id = call.get("id") or f"call_{state.current_step}_{tool_calls_to_execute.index(call)}"
 
                 yield ToolCallEvent(tool_name=tool_name, tool_input=params, task_id=state.task_id)
                 tool_result = await self._execute_tool(tool_name, params)
@@ -440,7 +437,7 @@ class AgentGraph:
                 state.messages.append(ChatMessage(
                     role="tool",
                     content=json.dumps(tool_result) if not isinstance(tool_result, str) else tool_result,
-                    tool_call_id=call_id,
+                    tool_call_id=tool_id,
                 ))
 
         state.status = AgentStatus.COMPLETED
