@@ -79,6 +79,10 @@ class TaskRequest(BaseModel):
         max_length=_MAX_FILE_PATHS,
         description=f"Referenced file paths or ingested document identifiers (max {_MAX_FILE_PATHS})"
     )
+    attachment_path: Optional[str] = Field(
+        default=None,
+        description="Single file attachment path from frontend chat upload"
+    )
     stream: bool = Field(
         default=False,
         description="Whether to stream real-time events and tokens"

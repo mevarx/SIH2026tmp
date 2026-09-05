@@ -47,6 +47,7 @@ from app.schemas.tasks import (
     TaskType,
 )
 from app.security.audit import audit_logger
+from app.vision.middleware import vision_middleware
 from app.vision.ocr import ocr_document
 
 logger = logging.getLogger(__name__)
@@ -126,12 +127,24 @@ async def _execute_task_pipeline(task_id: str, request: TaskRequest):
         result_payload: Any = None
         artifacts: List[Dict[str, Any]] = []
 
-        # Process document attachments and run local OCR if provided
+        # Consolidate candidate attachments
+        candidate_paths = list(request.file_paths)
+        if request.attachment_path and request.attachment_path not in candidate_paths:
+            candidate_paths.append(request.attachment_path)
+
+        # Multimodal Vision Pipeline: Detect and optimize image attachments via Pillow
+        multimodal_parts, non_image_paths = await vision_middleware.process_attachments(
+            file_paths=candidate_paths,
+            prompt=request.prompt,
+        )
+
         effective_prompt = request.prompt
-        if request.file_paths:
+
+        # Process remaining document attachments (PDF, DOCX, TXT) and run local OCR
+        if non_image_paths:
             emit_event(StatusEvent(status="reading_documents", message="Processing document attachments & running OCR...", task_id=task_id))
             doc_excerpts = []
-            for fp in request.file_paths:
+            for fp in non_image_paths:
                 p = Path(fp)
                 if p.is_file():
                     try:
@@ -203,10 +216,19 @@ async def _execute_task_pipeline(task_id: str, request: TaskRequest):
             ] if retrieved else []
 
         elif pipeline_type == TaskType.VISION:
-            vision_client = VisionClient()
-            if request.file_paths:
-                file_path = request.file_paths[0]
-                with open(file_path, "rb") as img_f:
+            emit_event(StatusEvent(status="vision_processing", message="Vision Tower analyzing optimized multimodal image payload...", task_id=task_id))
+            if multimodal_parts:
+                client = model_registry.get_client(role="vision", model_id=request.model)
+                gen_req = GenerationRequest(
+                    model=request.model,
+                    messages=[ChatMessage(role="user", content=multimodal_parts)],
+                    temperature=request.temperature or 0.2,
+                )
+                resp = await client.chat(gen_req)
+                result_payload = resp.content
+            elif candidate_paths:
+                vision_client = VisionClient()
+                with open(candidate_paths[0], "rb") as img_f:
                     img_bytes = img_f.read()
                 resp = await vision_client.analyze_image(
                     image_bytes=img_bytes,
@@ -215,7 +237,7 @@ async def _execute_task_pipeline(task_id: str, request: TaskRequest):
                 )
                 result_payload = resp.content
             else:
-                result_payload = "Vision task requested but no file_paths provided."
+                result_payload = "Vision task requested but no image file attachments provided."
 
         elif pipeline_type == TaskType.SANDBOX:
             runner = DockerSandboxRunner()

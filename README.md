@@ -10,12 +10,12 @@ The platform provides autonomous multi-step agents, Reciprocal Rank Fusion Hybri
 
 - **Local & Sovereign Intelligence:** 100% air-gapped execution on local hardware (consumer CPUs, Apple Silicon MacBooks, or dedicated GPU servers).
 - **Model-Agnostic Serving Contract:** Zero vendor lock-in. Powered by **Ornith-1.5-9B** (`ornith-ai/Ornith-1.5-9B`) with runtime switching across **Ollama (GGUF)**, **MLX (Apple Silicon)**, and **vLLM (NVIDIA GPU)** without application code changes.
-- **Autonomous Agent Graph:** Dynamic multi-step reasoning loop with deterministic tool dispatch (`calculator`, `document_tool`, `file_tool`, `sandbox`), native XML tool-calling parser, and `<think>` reasoning trace extraction.
-- **Hybrid RAG Pipeline:** Semantic vector search (Qdrant) fused with BM25 keyword matching via Reciprocal Rank Fusion (RRF, $k=60$) and batched embedding generation (batch size 32).
-- **Optimized Multimodal Vision & OCR:** Pillow-powered pre-encoding pipeline resizing images to max 1024px and compressing to JPEG (quality 75) for 60–80% payload reduction. Non-blocking Tesseract OCR and PyMuPDF text/image extraction.
-- **Isolated Docker Code Sandbox:** Hardened container execution with strict boundaries: `--memory=256m`, `--network=none`, `--rm`, `--read-only`, and `--pids-limit=64`.
-- **Tamper-Evident Audit Logging:** Append-only JSONL cryptographic trail (`data/audit.jsonl`) recording SHA-256 prompt hashes, tool executions, and outbound egress firewall compliance.
-- **Reactive Command Center UI:** React 19 + TypeScript frontend with native SSE `ReadableStream` token parsing, collapsible reasoning drawers, live Docker execution console, and air-gap telemetry ribbons.
+- **Autonomous Agent Graph with Critic Loop:** Multi-step reasoning loop with tool-call bundling (single assistant turn with multiple tool executions to prevent context pollution), automated Critic verification & self-correction loop, deterministic tool dispatch (`calculator`, `document_tool`, `file_tool`, `sandbox`), and `<think>` reasoning trace extraction.
+- **Glass Box Hybrid RAG & Citations:** Semantic vector search (Qdrant) fused with BM25 keyword matching via Reciprocal Rank Fusion (RRF, $k=60$) with explainable Citations inspector visualizing Vector, BM25, and RRF scores.
+- **Multimodal Vision Pipeline:** Middleware detecting image attachments, safeguarding against decompression bombs, downscaling to 1024px with Lanczos resampling, compressing to JPEG (quality 80) via Pillow, and injecting base64 data URIs into multimodal LLM payloads.
+- **Strictly Isolated Sandbox:** Hardened container execution with `--memory=256m`, `--memory-swap=256m` (zero swap), `--network=none`, `--rm`, `--read-only`, and `--pids-limit=64`. Insecure host execution fallback permanently eliminated; supports Linux `bwrap` or fail-secure rejection.
+- **Ed25519 Cryptographic Audit Trail:** Append-only JSONL cryptographic log (`data/audit.jsonl`) signing every entry with Ed25519 asymmetric signatures for non-repudiation, SHA-256 prompt hashing, and log tamper verification.
+- **High-Performance Command Center UI:** React 19 + TypeScript frontend with `@microsoft/fetch-event-source` line-buffering, `react-virtuoso` message list virtualization, `requestAnimationFrame` token update batching (eliminating UI jank), and `react-markdown` + `rehype-highlight` syntax-highlighted code blocks and tables.
 
 ---
 
@@ -78,14 +78,18 @@ SIH 2026 (DEMO-SIH26117)/
 │   │   │   │   └── file_tool.py       # Sandboxed file reader and writer
 │   │   │   └── vision/                # Computer vision & OCR
 │   │   │       ├── image.py           # Async image resizing & contrast enhancement
+│   │   │       ├── middleware.py      # Multimodal vision middleware (Pillow downscale & base64 injection)
 │   │   │       ├── ocr.py             # Tesseract OCR engine with PyMuPDF fallback
 │   │   │       └── pdf.py             # Async PyMuPDF renderer and metadata parser
 │   │   ├── Dockerfile
 │   │   └── requirements.txt           # Pinned backend dependencies
 │   └── frontend/                      # React 19 + TypeScript + Vite UI
 │       ├── src/
+│       │   ├── components/            # UI components (ChatFeed, MessageItem, CitationsTab, etc.)
+│       │   ├── hooks/                 # Throttled SSE streaming hooks (useTaskStream via RAF)
+│       │   ├── types/                 # TypeScript contracts (Task, Knowledge, Citations)
 │       │   ├── App.tsx                # Tactical workbench with native SSE stream reader
-│       │   ├── index.css              # Dark sovereign command center design system
+│       │   ├── index.css              # Dark sovereign command center design system & syntax highlighting
 │       │   └── main.tsx               # Root entrypoint
 │       ├── index.html
 │       ├── package.json
@@ -260,8 +264,8 @@ npm run dev
 | **Backend Framework** | Python 3.10+, FastAPI, Uvicorn, Pydantic v2, Pydantic-Settings |
 | **Model Inference** | HTTP connection pooling, SSE streaming, `<think>` parser, `httpx` |
 | **Local Foundation Model** | `ornith-ai/Ornith-1.5-9B` (Ollama GGUF / MLX / vLLM) |
-| **Vector Store & Retrieval** | Qdrant, `rank-bm25` (BM25Okapi), Reciprocal Rank Fusion |
-| **Document & Vision** | Pillow, PyMuPDF (`fitz`), `python-docx`, Tesseract OCR |
-| **Security & Auditing** | `aiofiles`, SHA-256 cryptographic hashing, egress firewall guard |
-| **Sandbox Execution** | Docker CLI subprocess runner with memory & network isolation limits |
-| **Frontend UI** | React 19, TypeScript, Vite, Vanilla CSS design system, Lucide Icons |
+| **Vector Store & Retrieval** | Qdrant, `rank-bm25` (BM25Okapi), Reciprocal Rank Fusion ($k=60$) |
+| **Document & Vision** | Pillow (multimodal pipeline & compression), PyMuPDF (`fitz`), `python-docx`, Tesseract OCR |
+| **Security & Auditing** | `cryptography` (Ed25519 digital signatures), `aiofiles`, strict `os.path.realpath` directory jailing, egress firewall |
+| **Sandbox Execution** | Docker CLI container runner with memory (`--memory=256m --memory-swap=256m`), dropped caps, Linux `bwrap` support, and fail-secure rejection |
+| **Frontend UI** | React 19, TypeScript, Vite, `@microsoft/fetch-event-source`, `react-virtuoso`, `react-markdown`, `rehype-highlight`, `remark-gfm`, Lucide Icons |

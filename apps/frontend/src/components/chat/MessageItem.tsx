@@ -1,4 +1,7 @@
 import { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import remarkGfm from 'remark-gfm';
 import { User, Shield, FileText, Copy, Check, Lock, Sparkles } from 'lucide-react';
 import { TaskMessage } from '../../types/task';
 import { ReasoningAccordion } from './ReasoningAccordion';
@@ -21,108 +24,104 @@ export function MessageItem({ message, onOpenSandbox, onRunCode }: MessageItemPr
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Helper to parse markdown text, inline code, and code blocks
+  // Render markdown with syntax highlighting, tables, lists, and sandbox run support
   const renderFormattedContent = (content: string) => {
     if (!content) return null;
 
-    // Split by fenced code blocks: ```lang ... ```
-    const segments = content.split(/(```[\s\S]*?```)/g);
-
-    return segments.map((segment, segIdx) => {
-      if (segment.startsWith('```') && segment.endsWith('```')) {
-        const firstLineBreak = segment.indexOf('\n');
-        const language = segment.slice(3, firstLineBreak).trim() || 'text';
-        const code = segment.slice(firstLineBreak + 1, -3);
-        return (
-          <CodeBlock
-            key={segIdx}
-            language={language}
-            code={code}
-            onRunInSandbox={language.includes('py') || language.includes('sh') ? onRunCode : undefined}
-          />
-        );
-      }
-
-      // Format lines, bolding, inline code, headers, and bullet points
-      const lines = segment.split('\n');
+    if (isUser) {
       return (
-        <div key={segIdx} className="space-y-2">
-          {lines.map((line, lineIdx) => {
-            const trimmed = line.trim();
-            if (!trimmed) {
-              return <div key={lineIdx} className="h-1.5" />;
-            }
-
-            // Heading 2 or 3
-            if (trimmed.startsWith('### ')) {
-              return (
-                <h4 key={lineIdx} className="text-sm font-semibold text-white tracking-tight mt-3 mb-1">
-                  {formatInline(trimmed.slice(4))}
-                </h4>
-              );
-            }
-            if (trimmed.startsWith('## ')) {
-              return (
-                <h3 key={lineIdx} className="text-base font-semibold text-white tracking-tight mt-4 mb-1.5 border-b border-white/5 pb-1">
-                  {formatInline(trimmed.slice(3))}
-                </h3>
-              );
-            }
-
-            // Bullet points
-            if (trimmed.startsWith('• ') || trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-              return (
-                <div key={lineIdx} className="flex items-start gap-2.5 pl-1.5 my-1">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] shrink-0 mt-2" />
-                  <span className="leading-relaxed text-white/90 text-[13.5px]">
-                    {formatInline(trimmed.slice(2))}
-                  </span>
-                </div>
-              );
-            }
-
-            return (
-              <p key={lineIdx} className="leading-relaxed text-white/90 text-[13.5px]">
-                {formatInline(line)}
-              </p>
-            );
-          })}
+        <div className="whitespace-pre-wrap leading-relaxed text-[13.5px] text-white">
+          {content}
         </div>
       );
-    });
+    }
+
+    return (
+      <div className="markdown-body text-[13.5px] text-white/90 leading-relaxed overflow-hidden">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeHighlight]}
+          components={{
+            code({ className, children, ...props }) {
+              const match = /language-(\w+)/.exec(className || '');
+              const codeString = String(children).replace(/\n$/, '');
+              const isInline = !match && !codeString.includes('\n');
+
+              if (isInline) {
+                return (
+                  <code
+                    className="px-1.5 py-0.5 rounded bg-white/[0.07] border border-white/10 font-mono text-xs text-[var(--accent)] select-all"
+                    {...props}
+                  >
+                    {children}
+                  </code>
+                );
+              }
+
+              const language = match ? match[1] : 'text';
+              return (
+                <CodeBlock
+                  language={language}
+                  code={codeString}
+                  onRunInSandbox={
+                    language.includes('py') || language.includes('sh') || language.includes('python')
+                      ? onRunCode
+                      : undefined
+                  }
+                />
+              );
+            },
+            table({ children }) {
+              return (
+                <div className="my-3 overflow-x-auto rounded-[var(--radius-sm)] border border-white/10">
+                  <table className="w-full text-left border-collapse text-xs">
+                    {children}
+                  </table>
+                </div>
+              );
+            },
+            thead({ children }) {
+              return <thead className="bg-white/5 border-b border-white/10">{children}</thead>;
+            },
+            th({ children }) {
+              return <th className="p-2.5 font-semibold text-white text-[12px]">{children}</th>;
+            },
+            td({ children }) {
+              return <td className="p-2.5 border-b border-white/5 text-white/85 text-[12px]">{children}</td>;
+            },
+            h1({ children }) {
+              return <h1 className="text-lg font-bold text-white tracking-tight mt-4 mb-2 pb-1 border-b border-white/10">{children}</h1>;
+            },
+            h2({ children }) {
+              return <h2 className="text-base font-semibold text-white tracking-tight mt-3.5 mb-1.5 pb-1 border-b border-white/5">{children}</h2>;
+            },
+            h3({ children }) {
+              return <h3 className="text-sm font-semibold text-white tracking-tight mt-3 mb-1">{children}</h3>;
+            },
+            p({ children }) {
+              return <p className="mb-2.5 last:mb-0 leading-relaxed text-[13.5px]">{children}</p>;
+            },
+            ul({ children }) {
+              return <ul className="list-disc list-inside space-y-1 my-2 pl-1 text-[13.5px] text-white/90">{children}</ul>;
+            },
+            ol({ children }) {
+              return <ol className="list-decimal list-inside space-y-1 my-2 pl-1 text-[13.5px] text-white/90">{children}</ol>;
+            },
+            blockquote({ children }) {
+              return (
+                <blockquote className="border-l-2 border-[var(--accent)] pl-3 my-2 text-white/70 italic bg-white/[0.02] py-1 rounded-r">
+                  {children}
+                </blockquote>
+              );
+            },
+          }}
+        >
+          {content}
+        </ReactMarkdown>
+      </div>
+    );
   };
 
-  // Helper for inline `code` and **bold**
-  const formatInline = (text: string) => {
-    // Split by inline code: `...`
-    const parts = text.split(/(`[^`]+`)/g);
-
-    return parts.map((part, pIdx) => {
-      if (part.startsWith('`') && part.endsWith('`')) {
-        return (
-          <code
-            key={pIdx}
-            className="px-1.5 py-0.5 rounded bg-white/[0.07] border border-white/10 font-mono text-xs text-[var(--accent)] select-all"
-          >
-            {part.slice(1, -1)}
-          </code>
-        );
-      }
-
-      // Handle bold **text**
-      const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
-      return boldParts.map((bPart, bIdx) => {
-        if (bPart.startsWith('**') && bPart.endsWith('**')) {
-          return (
-            <strong key={`${pIdx}-${bIdx}`} className="font-semibold text-white">
-              {bPart.slice(2, -2)}
-            </strong>
-          );
-        }
-        return bPart;
-      });
-    });
-  };
 
   return (
     <div

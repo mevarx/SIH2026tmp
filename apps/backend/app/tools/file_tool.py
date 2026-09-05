@@ -6,47 +6,111 @@ Prevents path traversal attacks and unauthorized filesystem access.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Allowed base directories for file operations (configurable)
-_ALLOWED_DIRECTORIES: List[str] = [
+# Base directories allowed for agent file I/O operations
+_DEFAULT_ALLOWED_DIRS: List[str] = [
     "data",
     "uploads",
     "tmp",
 ]
 
 
-def _resolve_and_validate(file_path: str, allowed_dirs: Optional[List[str]] = None) -> Path:
+def _get_canonical_allowed_dirs(allowed_dirs: Optional[List[str]] = None) -> List[str]:
+    """Resolve and return canonical real paths for all whitelisted directories."""
+    dirs = allowed_dirs or _DEFAULT_ALLOWED_DIRS
+    canonical_dirs: List[str] = []
+
+    # Include relative to current working directory and relative to repository root
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+
+    for d in dirs:
+        p_cwd = Path.cwd() / d
+        p_cwd.mkdir(parents=True, exist_ok=True)
+        canonical_dirs.append(os.path.normcase(os.path.realpath(str(p_cwd))))
+
+        p_repo = repo_root / d
+        if p_repo.exists() or d in ("data", "uploads", "tmp"):
+            p_repo.mkdir(parents=True, exist_ok=True)
+            canonical_dirs.append(os.path.normcase(os.path.realpath(str(p_repo))))
+
+    return list(dict.fromkeys(canonical_dirs))
+
+
+def _resolve_and_validate(
+    file_path: str,
+    allowed_dirs: Optional[List[str]] = None,
+    is_write: bool = False,
+) -> Path:
     """
-    Resolve the file path and validate it is within allowed directories.
+    Resolve the file path using os.path.realpath() to resolve all symlinks,
+    and validate that the target and parent directories are strictly jailed
+    to whitelisted base directories.
 
     Raises:
-        PermissionError: If the path is outside allowed directories.
-        ValueError: If the path contains traversal patterns.
+        PermissionError: If path traversal or symlink escape is detected.
+        ValueError: If the path contains null bytes or illegal characters.
     """
-    dirs = allowed_dirs or _ALLOWED_DIRECTORIES
+    if not file_path or not file_path.strip():
+        raise ValueError("File path cannot be empty")
 
-    # Block obvious traversal patterns
-    if ".." in file_path:
-        raise PermissionError(f"Path traversal detected: {file_path}")
+    if "\0" in file_path:
+        raise ValueError("Null byte detected in file path")
 
-    resolved = Path(file_path).resolve()
+    # Reject obvious traversal sequences before path resolution
+    norm_input = file_path.replace("\\", "/")
+    parts = norm_input.split("/")
+    if ".." in parts:
+        raise PermissionError(f"Path traversal sequence '..' detected in path: {file_path}")
 
-    # Check if the resolved path is within any allowed directory
-    for allowed in dirs:
-        allowed_path = Path(allowed).resolve()
+    # Canonicalize target path (resolving all symlinks)
+    target_abs = os.path.abspath(file_path)
+    real_path = os.path.realpath(target_abs)
+    norm_real_path = os.path.normcase(real_path)
+
+    canonical_allowed = _get_canonical_allowed_dirs(allowed_dirs)
+
+    # Check if target canonical path is inside any allowed base directory
+    inside_jail = False
+    for allowed_base in canonical_allowed:
         try:
-            resolved.relative_to(allowed_path)
-            return resolved
+            common = os.path.commonpath([norm_real_path, allowed_base])
+            if common == allowed_base:
+                inside_jail = True
+                break
         except ValueError:
+            # Different drives on Windows (e.g. C: vs D:)
             continue
 
-    raise PermissionError(
-        f"Access denied: {file_path} is not within allowed directories: {dirs}"
-    )
+    if not inside_jail:
+        raise PermissionError(
+            f"Access denied: Resolved path '{real_path}' is outside whitelisted directories: {canonical_allowed}"
+        )
+
+    # For writes, also ensure parent directory does not escape through symlinks
+    if is_write:
+        parent_real = os.path.realpath(os.path.dirname(target_abs))
+        norm_parent = os.path.normcase(parent_real)
+        parent_inside_jail = False
+        for allowed_base in canonical_allowed:
+            try:
+                common = os.path.commonpath([norm_parent, allowed_base])
+                if common == allowed_base:
+                    parent_inside_jail = True
+                    break
+            except ValueError:
+                continue
+
+        if not parent_inside_jail:
+            raise PermissionError(
+                f"Access denied: Target parent directory '{parent_real}' is outside whitelisted directories"
+            )
+
+    return Path(real_path)
 
 
 async def read_file(
@@ -117,7 +181,7 @@ async def write_file(
             f"Content too large: exceeds limit of {max_size_bytes} bytes"
         )
 
-    resolved = _resolve_and_validate(file_path)
+    resolved = _resolve_and_validate(file_path, is_write=True)
 
     # Ensure parent directory exists
     resolved.parent.mkdir(parents=True, exist_ok=True)

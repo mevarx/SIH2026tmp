@@ -7,6 +7,8 @@ resource limits. Uses asyncio.create_subprocess_exec for non-blocking execution.
 
 import asyncio
 import logging
+import os
+import shutil
 import sys
 import tempfile
 import time
@@ -41,10 +43,8 @@ _MAX_OUTPUT_BYTES = 64 * 1024  # 64KB max output capture
 class DockerSandboxRunner:
     """
     Executes code inside a Docker container with strict isolation.
-
-    Usage:
-        runner = DockerSandboxRunner()
-        result = await runner.run_code("print('hello')", language="python")
+    If Docker is unavailable, attempts bubblewrap (Linux) or fails gracefully.
+    Never falls back to un-sandboxed host execution.
     """
 
     def __init__(self, limits: Optional[SandboxLimits] = None):
@@ -102,7 +102,7 @@ class DockerSandboxRunner:
         code_file: str,
         timeout: int,
     ) -> SandboxResult:
-        """Run the code file inside a Docker container."""
+        """Run the code file inside a Docker container or fallback to bwrap/rejection."""
         docker_args = self.limits.to_docker_args()
         container_code_path = "/tmp/code.py"
 
@@ -147,6 +147,11 @@ class DockerSandboxRunner:
                 or len(stderr_bytes) > _MAX_OUTPUT_BYTES
             )
 
+            # Check if Docker failed due to daemon not running (e.g. exit code 125)
+            if process.returncode != 0 and ("Cannot connect to the Docker daemon" in stderr_str or "docker daemon is not running" in stderr_str.lower()):
+                logger.warning("Docker daemon not accessible: %s", stderr_str.strip())
+                return await self._execute_host_isolation_or_fail(code_file, timeout, start_time, reason=stderr_str.strip())
+
             return SandboxResult(
                 exit_code=process.returncode or 1,
                 stdout=stdout_str,
@@ -157,24 +162,70 @@ class DockerSandboxRunner:
             )
 
         except FileNotFoundError:
-            logger.warning("Docker CLI not found; falling back to host isolated runner.")
-            return await self._execute_host_fallback(code_file, timeout, start_time)
+            logger.warning("Docker CLI not found on PATH.")
+            return await self._execute_host_isolation_or_fail(code_file, timeout, start_time, reason="Docker CLI binary not found on host system.")
         except Exception as exc:
             logger.error("Sandbox execution error: %s", exc)
-            return SandboxResult(
-                exit_code=1,
-                stderr=f"Sandbox execution error: {exc}",
-                duration_seconds=time.monotonic() - start_time,
-            )
+            return await self._execute_host_isolation_or_fail(code_file, timeout, start_time, reason=str(exc))
 
-    async def _execute_host_fallback(
+    async def _execute_host_isolation_or_fail(
         self,
         code_file: str,
         timeout: int,
         start_time: float,
+        reason: str = "",
     ) -> SandboxResult:
-        """Isolated host subprocess fallback when Docker is unavailable."""
-        cmd = [sys.executable, "-I", code_file]
+        """
+        Check for strict Linux container sandbox (bubblewrap 'bwrap').
+        If bwrap is available on Linux, execute inside bubblewrap with dropped privileges and unshared namespaces.
+        Otherwise, FAIL SECURELY. Insecure host execution via 'python -I' is strictly disallowed.
+        """
+        bwrap_path = shutil.which("bwrap")
+        if bwrap_path and sys.platform.startswith("linux"):
+            logger.info("Docker unavailable; executing in strict bubblewrap jail.")
+            return await self._execute_in_bubblewrap(code_file, timeout, start_time, bwrap_path)
+
+        # Insecure execution rejected
+        duration = time.monotonic() - start_time
+        rejection_msg = (
+            "Security Policy Violation: Untrusted code execution requires Docker containerization or Linux bubblewrap isolation.\n"
+            f"Details: {reason or 'Docker daemon is not running.'}\n"
+            "Insecure host subprocess execution ('python -I') has been permanently disabled in compliance with sovereign air-gap isolation standards."
+        )
+        logger.error("Sandbox execution blocked: %s", rejection_msg)
+        return SandboxResult(
+            exit_code=1,
+            stdout="",
+            stderr=rejection_msg,
+            duration_seconds=round(duration, 3),
+            timed_out=False,
+            truncated=False,
+        )
+
+    async def _execute_in_bubblewrap(
+        self,
+        code_file: str,
+        timeout: int,
+        start_time: float,
+        bwrap_path: str,
+    ) -> SandboxResult:
+        """Execute Python script under strict bubblewrap (bwrap) Linux sandbox."""
+        cmd = [
+            bwrap_path,
+            "--ro-bind", "/usr", "/usr",
+            "--ro-bind", "/lib", "/lib",
+            "--ro-bind", "/lib64", "/lib64",
+            "--ro-bind", "/bin", "/bin",
+            "--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf",
+            "--proc", "/proc",
+            "--dev", "/dev",
+            "--tmpfs", "/tmp",
+            "--unshare-all",  # Unshare IPC, net, PID, user, UTS, cgroup
+            "--die-with-parent",
+            "--new-session",
+            "--ro-bind", code_file, "/tmp/code.py",
+            sys.executable, "/tmp/code.py",
+        ]
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -191,20 +242,17 @@ class DockerSandboxRunner:
                 process.kill()
                 await process.wait()
                 stdout_bytes = b""
-                stderr_bytes = b"Execution timed out and was terminated."
+                stderr_bytes = b"Bubblewrap execution timed out and was terminated."
                 timed_out = True
 
             duration = time.monotonic() - start_time
             stdout_str = stdout_bytes[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
             stderr_str = stderr_bytes[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
 
-            status_notice = "[Host Execution Sandbox: Docker daemon not detected]"
-            full_stderr = f"{status_notice}\n{stderr_str}".strip() if stderr_str else status_notice
-
             return SandboxResult(
                 exit_code=process.returncode if process.returncode is not None else (1 if timed_out else 0),
                 stdout=stdout_str,
-                stderr=full_stderr,
+                stderr=stderr_str,
                 duration_seconds=round(duration, 3),
                 timed_out=timed_out,
                 truncated=len(stdout_bytes) > _MAX_OUTPUT_BYTES or len(stderr_bytes) > _MAX_OUTPUT_BYTES,
@@ -212,10 +260,9 @@ class DockerSandboxRunner:
         except Exception as exc:
             return SandboxResult(
                 exit_code=1,
-                stderr=f"Host sandbox error: {exc}",
+                stderr=f"Bubblewrap sandbox execution error: {exc}",
                 duration_seconds=time.monotonic() - start_time,
             )
-
 
     async def check_docker_available(self) -> bool:
         """Check if Docker daemon is running and accessible."""
@@ -229,3 +276,12 @@ class DockerSandboxRunner:
             return process.returncode == 0
         except Exception:
             return False
+
+    async def check_sandbox_backend(self) -> str:
+        """Return the active sandbox isolation engine ('docker', 'bubblewrap', or 'none')."""
+        if await self.check_docker_available():
+            return "docker"
+        if shutil.which("bwrap") and sys.platform.startswith("linux"):
+            return "bubblewrap"
+        return "none"
+

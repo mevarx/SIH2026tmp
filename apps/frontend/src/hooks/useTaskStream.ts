@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { TaskMessage, TaskType, TaskAttachment } from '../types/task';
 
 export function useTaskStream() {
@@ -7,17 +8,84 @@ export function useTaskStream() {
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // RAF Throttling Buffer for UI Jank elimination
+  const tokenBufferRef = useRef<string>('');
+  const reasoningBufferRef = useRef<string>('');
+  const activeAssistantIdRef = useRef<string | null>(null);
+  const rafIdRef = useRef<number | null>(null);
+  const lastFlushTimeRef = useRef<number>(0);
+
+  // Flushes buffered tokens and reasoning into React state
+  const flushBuffers = useCallback(() => {
+    const assistantId = activeAssistantIdRef.current;
+    const newTokens = tokenBufferRef.current;
+    const newReasoning = reasoningBufferRef.current;
+
+    if (!assistantId || (!newTokens && !newReasoning)) {
+      return;
+    }
+
+    tokenBufferRef.current = '';
+    reasoningBufferRef.current = '';
+    lastFlushTimeRef.current = performance.now();
+
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== assistantId) return m;
+        return {
+          ...m,
+          content: newTokens ? m.content + newTokens : m.content,
+          reasoning: newReasoning ? (m.reasoning || '') + newReasoning : m.reasoning,
+        };
+      })
+    );
+  }, []);
+
+  // Schedules RAF update throttled to ~60-80ms
+  const scheduleBatchedUpdate = useCallback(() => {
+    if (rafIdRef.current !== null) return;
+
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      const now = performance.now();
+      if (
+        now - lastFlushTimeRef.current >= 60 ||
+        tokenBufferRef.current.length > 80 ||
+        reasoningBufferRef.current.length > 80
+      ) {
+        flushBuffers();
+      } else {
+        // Re-schedule for next frame if buffer is small
+        scheduleBatchedUpdate();
+      }
+    });
+  }, [flushBuffers]);
+
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+    };
+  }, []);
+
   const cancelTask = useCallback(async () => {
     if (currentTaskId) {
       try {
         await fetch(`/api/tasks/${currentTaskId}`, { method: 'DELETE' });
       } catch {
-        // Standby
+        // Ignore network cancellation errors
       }
     }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    flushBuffers();
+
     setIsStreaming(false);
     setCurrentTaskId(null);
 
@@ -28,7 +96,7 @@ export function useTaskStream() {
           : msg
       )
     );
-  }, [currentTaskId]);
+  }, [currentTaskId, flushBuffers]);
 
   const submitTask = useCallback(
     async (
@@ -44,6 +112,9 @@ export function useTaskStream() {
 
       const userMsgId = `user-${Date.now()}`;
       const assistantMsgId = `asst-${Date.now()}`;
+      activeAssistantIdRef.current = assistantMsgId;
+      tokenBufferRef.current = '';
+      reasoningBufferRef.current = '';
 
       const userMessage: TaskMessage = {
         id: userMsgId,
@@ -83,6 +154,7 @@ export function useTaskStream() {
             sandbox: options.sandbox ?? (taskType === 'sandbox'),
             temperature: options.temperature ?? 0.7,
             attachment_path: options.attachment?.filePath,
+            file_paths: options.attachment?.filePath ? [options.attachment.filePath] : [],
           }),
           signal: controller.signal,
         });
@@ -100,100 +172,116 @@ export function useTaskStream() {
           );
         }
 
-        // 2. Open SSE stream
+        // 2. Open SSE stream via @microsoft/fetch-event-source
         if (taskId) {
-          const streamRes = await fetch(`/api/tasks/${taskId}/stream`, {
+          await fetchEventSource(`/api/tasks/${taskId}/stream`, {
             signal: controller.signal,
-          });
+            headers: {
+              Accept: 'text/event-stream',
+            },
+            openWhenHidden: true,
+            async onopen(response) {
+              if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+                return;
+              }
+              throw new Error(`Unexpected stream response status ${response.status}`);
+            },
+            onmessage(event) {
+              const eventType = event.event || 'token';
+              const rawData = event.data;
+              if (!rawData) return;
 
-          if (streamRes.body) {
-            const reader = streamRes.body.getReader();
-            const decoder = new TextDecoder('utf-8');
-            let buffer = '';
+              try {
+                const data = JSON.parse(rawData);
 
-            while (true) {
-              const { value, done } = await reader.read();
-              if (done) break;
-
-              buffer += decoder.decode(value, { stream: true });
-              const parts = buffer.split('\n\n');
-              buffer = parts.pop() || '';
-
-              for (const part of parts) {
-                if (!part.trim()) continue;
-                let eventType = 'token';
-                let dataStr = '';
-
-                for (const line of part.split('\n')) {
-                  if (line.startsWith('event: ')) {
-                    eventType = line.slice(7).trim();
-                  } else if (line.startsWith('data: ')) {
-                    dataStr = line.slice(6).trim();
-                  }
-                }
-
-                if (!dataStr) continue;
-
-                try {
-                  const data = JSON.parse(dataStr);
-
-                  if (eventType === 'token' && data.token) {
-                    setMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === assistantMsgId
-                          ? { ...m, content: m.content + data.token }
-                          : m
-                      )
-                    );
-                  } else if (eventType === 'reasoning' && data.reasoning) {
-                    setMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === assistantMsgId
-                          ? { ...m, reasoning: (m.reasoning || '') + data.reasoning }
-                          : m
-                      )
-                    );
-                  } else if (eventType === 'tool_call' && data.tool) {
+                if (eventType === 'token' && data.token) {
+                  tokenBufferRef.current += data.token;
+                  scheduleBatchedUpdate();
+                } else if (eventType === 'reasoning' && data.reasoning) {
+                  reasoningBufferRef.current += data.reasoning;
+                  scheduleBatchedUpdate();
+                } else if (eventType === 'tool_call') {
+                  flushBuffers();
+                  const toolName = data.tool_name || data.tool;
+                  if (toolName) {
                     setMessages((prev) =>
                       prev.map((m) => {
                         if (m.id !== assistantMsgId) return m;
                         const calls = [...(m.toolCalls || [])];
                         calls.push({
-                          name: data.tool,
-                          params: data.params || {},
-                          result: data.result,
-                          status: data.status || 'success',
+                          name: toolName,
+                          params: data.tool_input || data.params || {},
+                          status: 'running',
                         });
                         return { ...m, toolCalls: calls };
                       })
                     );
-                  } else if (eventType === 'completion') {
-                    const elapsed = Math.round(performance.now() - startTime);
-                    setMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === assistantMsgId
-                          ? { ...m, status: 'completed', durationMs: elapsed }
-                          : m
-                      )
-                    );
                   }
-                } catch {
-                  // Text fallback
-                  if (dataStr) {
-                    setMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === assistantMsgId ? { ...m, content: m.content + dataStr } : m
-                      )
-                    );
-                  }
+                } else if (eventType === 'tool_result') {
+                  flushBuffers();
+                  const toolName = data.tool_name || data.tool;
+                  setMessages((prev) =>
+                    prev.map((m) => {
+                      if (m.id !== assistantMsgId || !m.toolCalls) return m;
+                      const calls = m.toolCalls.map((c) =>
+                        c.name === toolName && c.status === 'running'
+                          ? { ...c, result: data.result, status: 'success' as const }
+                          : c
+                      );
+                      return { ...m, toolCalls: calls };
+                    })
+                  );
+                } else if (eventType === 'completion') {
+                  flushBuffers();
+                  const elapsed = Math.round(performance.now() - startTime);
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsgId
+                        ? {
+                            ...m,
+                            status: 'completed',
+                            durationMs: elapsed,
+                            content: m.content || (typeof data.result === 'string' ? data.result : m.content),
+                          }
+                        : m
+                    )
+                  );
+                  controller.abort(); // Clean finish
+                } else if (eventType === 'error') {
+                  flushBuffers();
+                  const errorMsg = data.error || 'Execution failed';
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantMsgId
+                        ? {
+                            ...m,
+                            status: 'failed',
+                            content: m.content ? `${m.content}\n\n[Error: ${errorMsg}]` : `[Error: ${errorMsg}]`,
+                          }
+                        : m
+                    )
+                  );
+                  controller.abort();
                 }
+              } catch {
+                // Fallback for raw text token
+                tokenBufferRef.current += rawData;
+                scheduleBatchedUpdate();
               }
-            }
-          }
+            },
+            onerror(err) {
+              // If user or stream aborted cleanly, ignore
+              if (controller.signal.aborted) {
+                return;
+              }
+              logger_error: console.warn('SSE stream error:', err);
+              throw err; // Stop retrying on fatal error
+            },
+          });
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
-          // If backend returned immediate task response or offline demo fallback
+          flushBuffers();
           setMessages((prev) =>
             prev.map((m) => {
               if (m.id !== assistantMsgId) return m;
@@ -222,11 +310,12 @@ export function useTaskStream() {
           );
         }
       } finally {
+        flushBuffers();
         setIsStreaming(false);
         setCurrentTaskId(null);
       }
     },
-    []
+    [flushBuffers, scheduleBatchedUpdate]
   );
 
   const clearMessages = useCallback(() => {
@@ -242,3 +331,4 @@ export function useTaskStream() {
     clearMessages,
   };
 }
+

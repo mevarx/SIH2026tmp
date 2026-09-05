@@ -55,8 +55,10 @@ Or use standard function calling. When you have collected sufficient information
 class AgentGraph:
     """Lightweight autonomous agent execution state graph."""
 
-    def __init__(self, max_steps: int = 6):
+    def __init__(self, max_steps: int = 6, enable_critic: bool = True):
         self.max_steps = max_steps
+        self.enable_critic = enable_critic
+        self.max_critic_loops = 1
         self.sandbox_runner = DockerSandboxRunner()
 
     def _get_tools_schema(self) -> List[Dict[str, Any]]:
@@ -133,6 +135,46 @@ class AgentGraph:
                 continue
         return calls
 
+    async def _evaluate_with_critic(
+        self,
+        client: Any,
+        prompt: str,
+        draft: str,
+    ) -> tuple[bool, str]:
+        """
+        Agentic self-correction step: evaluates draft response against original prompt.
+        Returns (passed: bool, critique: str).
+        """
+        eval_prompt = (
+            f"You are Sovereign Critic, an automated verification engine for a sovereign enterprise AI assistant.\n"
+            f"Evaluate the draft response against the original user prompt and any explicit constraints:\n\n"
+            f"--- ORIGINAL USER PROMPT ---\n{prompt}\n\n"
+            f"--- DRAFT RESPONSE ---\n{draft}\n\n"
+            f"Determine whether the draft response fully and accurately fulfills the user prompt, "
+            f"respects all constraints, and contains no hallucinations or missing critical steps.\n"
+            f"Respond STRICTLY in JSON format:\n"
+            f'{{"passed": true, "critique": "Brief confirmation"}}\n'
+            f"OR\n"
+            f'{{"passed": false, "critique": "Specific missing constraints or errors to fix"}}\n'
+        )
+        try:
+            req = GenerationRequest(
+                prompt=eval_prompt,
+                system_prompt="You are a strict verification critic. Output valid JSON only.",
+                temperature=0.1,
+            )
+            resp = await client.chat(req)
+            text = (resp.content or "").strip()
+            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+            raw_json = json_match.group(1) if json_match else text
+            parsed = json.loads(raw_json)
+            passed = bool(parsed.get("passed", True))
+            critique = str(parsed.get("critique", ""))
+            return passed, critique
+        except Exception as exc:
+            logger.warning("Critic evaluation parsing error (%s); defaulting to pass.", exc)
+            return True, ""
+
     async def run(self, state: AgentState) -> AgentState:
         """Runs the agent graph to completion synchronously."""
         state.status = AgentStatus.PLANNING
@@ -145,6 +187,7 @@ class AgentGraph:
             ]
 
         tools = self._get_tools_schema()
+        critic_loop_count = 0
 
         while state.current_step < state.max_steps:
             state.status = AgentStatus.EXECUTING
@@ -164,7 +207,7 @@ class AgentGraph:
             raw_text = response.content or ""
             reasoning = response.reasoning_content or ""
 
-            # Check for standard tool calls or XML tool calls
+            # Extract tool calls (structured or XML format)
             tool_calls_to_execute = []
             if response.tool_calls:
                 for tc in response.tool_calls:
@@ -178,8 +221,31 @@ class AgentGraph:
                 tool_calls_to_execute.extend(xml_calls)
 
             if not tool_calls_to_execute:
-                # No more tools called; model produced final output
+                # No tools called; model produced candidate final output
                 clean_output = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL).strip()
+
+                # Critic Verification Step (Agentic Self-Correction)
+                if self.enable_critic and critic_loop_count < self.max_critic_loops and state.current_step < state.max_steps - 1:
+                    state.status = AgentStatus.EVALUATING
+                    passed, critique = await self._evaluate_with_critic(client, state.prompt, clean_output)
+                    if not passed and critique:
+                        logger.info("Critic rejected draft response: %s", critique)
+                        critic_loop_count += 1
+                        state.add_step_result(StepResult(
+                            step_index=state.current_step,
+                            thinking=f"Critic feedback: {critique}",
+                            action="self_correction",
+                            tool_name="critic",
+                            tool_output=critique,
+                        ))
+                        # Loop back with critic feedback
+                        state.messages.append(ChatMessage(role="assistant", content=clean_output))
+                        state.messages.append(ChatMessage(
+                            role="user",
+                            content=f"[Critic Feedback]: Your draft response missed constraints: {critique}. Please revise your output to satisfy all criteria.",
+                        ))
+                        continue
+
                 state.final_output = clean_output
                 state.status = AgentStatus.COMPLETED
                 state.add_step_result(StepResult(
@@ -190,10 +256,33 @@ class AgentGraph:
                 ))
                 return state
 
-            # Execute tool calls
+            # Standardize tool calls and append assistant message ONCE (avoids context pollution)
+            standardized_calls = []
+            for idx, call in enumerate(tool_calls_to_execute):
+                call_id = call.get("id") or f"call_{state.current_step}_{idx}"
+                call["id"] = call_id
+                standardized_calls.append({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": call.get("name", ""),
+                        "arguments": json.dumps(call.get("parameters", {})),
+                    },
+                })
+
+            # Append the single assistant message with all tool calls
+            state.messages.append(ChatMessage(
+                role="assistant",
+                content=raw_text if raw_text.strip() else None,
+                tool_calls=standardized_calls,
+            ))
+
+            # Execute tool calls and append individual tool response messages
             for call in tool_calls_to_execute:
                 tool_name = call.get("name", "")
                 params = call.get("parameters", {})
+                call_id = call.get("id")
+
                 tool_result = await self._execute_tool(tool_name, params)
 
                 state.add_step_result(StepResult(
@@ -205,16 +294,10 @@ class AgentGraph:
                     tool_output=tool_result,
                 ))
 
-                # Append assistant message & tool result back to message history
-                state.messages.append(ChatMessage(
-                    role="assistant",
-                    content=raw_text or f"Calling {tool_name}",
-                    tool_calls=[{"id": call.get("id", f"call_{state.current_step}"), "type": "function", "function": {"name": tool_name, "arguments": json.dumps(params)}}] if call.get("id") else None,
-                ))
                 state.messages.append(ChatMessage(
                     role="tool",
                     content=json.dumps(tool_result) if not isinstance(tool_result, str) else tool_result,
-                    tool_call_id=call.get("id", f"call_{state.current_step}"),
+                    tool_call_id=call_id,
                 ))
 
         # Max steps reached
@@ -235,9 +318,15 @@ class AgentGraph:
             ]
 
         tools = self._get_tools_schema()
+        critic_loop_count = 0
 
         while state.current_step < state.max_steps:
-            yield StatusEvent(status="executing", message=f"Executing step {state.current_step + 1} of {state.max_steps}...", progress=(state.current_step / state.max_steps), task_id=state.task_id)
+            yield StatusEvent(
+                status="executing",
+                message=f"Executing step {state.current_step + 1} of {state.max_steps}...",
+                progress=(state.current_step / state.max_steps),
+                task_id=state.task_id,
+            )
 
             req = GenerationRequest(
                 messages=state.messages,
@@ -273,6 +362,33 @@ class AgentGraph:
 
             if not tool_calls_to_execute:
                 clean_output = re.sub(r"<tool_call>.*?</tool_call>", "", raw_text, flags=re.DOTALL).strip()
+
+                # Critic Verification Step (Agentic Self-Correction)
+                if self.enable_critic and critic_loop_count < self.max_critic_loops and state.current_step < state.max_steps - 1:
+                    state.status = AgentStatus.EVALUATING
+                    yield StatusEvent(status="evaluating", message="Critic evaluating draft response against constraints...", task_id=state.task_id)
+
+                    passed, critique = await self._evaluate_with_critic(client, state.prompt, clean_output)
+                    if not passed and critique:
+                        logger.info("Critic rejected draft response: %s", critique)
+                        critic_loop_count += 1
+                        yield ReasoningEvent(reasoning=f"[Self-Correction Critic]: {critique}\nRevising response to address missing constraints...", task_id=state.task_id)
+
+                        state.add_step_result(StepResult(
+                            step_index=state.current_step,
+                            thinking=f"Critic feedback: {critique}",
+                            action="self_correction",
+                            tool_name="critic",
+                            tool_output=critique,
+                        ))
+
+                        state.messages.append(ChatMessage(role="assistant", content=clean_output))
+                        state.messages.append(ChatMessage(
+                            role="user",
+                            content=f"[Critic Feedback]: Your draft response missed constraints: {critique}. Please revise your output to satisfy all criteria.",
+                        ))
+                        continue
+
                 state.final_output = clean_output
                 state.status = AgentStatus.COMPLETED
 
@@ -281,9 +397,32 @@ class AgentGraph:
                 yield CompletionEvent(result={"output": clean_output, "steps": [s.model_dump() for s in state.step_results]}, task_id=state.task_id)
                 return
 
+            # Standardize tool calls and append assistant message ONCE (avoids context pollution)
+            standardized_calls = []
+            for idx, call in enumerate(tool_calls_to_execute):
+                call_id = call.get("id") or f"call_{state.current_step}_{idx}"
+                call["id"] = call_id
+                standardized_calls.append({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": call.get("name", ""),
+                        "arguments": json.dumps(call.get("parameters", {})),
+                    },
+                })
+
+            # Append the single assistant message with all tool calls
+            state.messages.append(ChatMessage(
+                role="assistant",
+                content=raw_text if raw_text.strip() else None,
+                tool_calls=standardized_calls,
+            ))
+
+            # Execute tool calls and append individual tool response messages
             for call in tool_calls_to_execute:
                 tool_name = call.get("name", "")
                 params = call.get("parameters", {})
+                call_id = call.get("id")
 
                 yield ToolCallEvent(tool_name=tool_name, tool_input=params, task_id=state.task_id)
                 tool_result = await self._execute_tool(tool_name, params)
@@ -299,14 +438,9 @@ class AgentGraph:
                 ))
 
                 state.messages.append(ChatMessage(
-                    role="assistant",
-                    content=raw_text or f"Calling {tool_name}",
-                    tool_calls=[{"id": call.get("id", f"call_{state.current_step}"), "type": "function", "function": {"name": tool_name, "arguments": json.dumps(params)}}] if call.get("id") else None,
-                ))
-                state.messages.append(ChatMessage(
                     role="tool",
                     content=json.dumps(tool_result) if not isinstance(tool_result, str) else tool_result,
-                    tool_call_id=call.get("id", f"call_{state.current_step}"),
+                    tool_call_id=call_id,
                 ))
 
         state.status = AgentStatus.COMPLETED
@@ -315,3 +449,4 @@ class AgentGraph:
 
 
 agent_graph = AgentGraph()
+

@@ -4,8 +4,8 @@
 **Hackathon:** Smart India Hackathon 2026  
 **Problem Statement:** SIH26117  
 **Repository:** `rav-builds/DEMO-SIH26117`  
-**Status:** Full-Stack Sovereign AI Platform Complete (Inference, Hybrid RAG, Agent State Machine, Docker Sandbox, SSE UI, Operational Diagnostics)  
-**Last Updated:** 2026-09-04  
+**Status:** Full-Stack Sovereign AI Platform Complete (Inference, Hybrid RAG, Agent Critic Loop, Docker/Bubblewrap Sandbox, Ed25519 Audit, SSE Throttled UI, Operational Diagnostics)  
+**Last Updated:** 2026-09-05  
 
 ---
 
@@ -28,7 +28,7 @@ SIH 2026 (DEMO-SIH26117)/
 │   │   ├── app/
 │   │   │   ├── agent/               # Autonomous agent orchestration & state graph
 │   │   │   │   ├── events.py        # Real-time agent event schemas
-│   │   │   │   ├── graph.py         # Agent execution state machine (step loop & tool calls)
+│   │   │   │   ├── graph.py         # Multi-step reasoning, tool-call bundling & Critic evaluation loop
 │   │   │   │   ├── router.py        # Intent & task routing logic
 │   │   │   │   └── state.py         # Agent memory, messages, & execution state
 │   │   │   ├── api/                 # REST & SSE API Routers
@@ -52,33 +52,37 @@ SIH 2026 (DEMO-SIH26117)/
 │   │   │   │   ├── retriever.py     # Hybrid retrieval (Qdrant Dense + BM25Okapi Sparse RRF)
 │   │   │   │   └── vector_store.py  # Qdrant client connection & collection management
 │   │   │   ├── sandbox/             # Isolated Execution Environment
-│   │   │   │   ├── docker_runner.py # Docker runner with code synthesis, timeout & safe fallback
-│   │   │   │   └── limits.py        # Strict container jail (--network=none, 256MB, pids-limit=64)
+│   │   │   │   ├── docker_runner.py # Docker runner with code synthesis, Linux bwrap, fail-secure rejection
+│   │   │   │   └── limits.py        # Strict resource limits (--memory=256m, --memory-swap=256m, --network=none)
 │   │   │   ├── schemas/             # Pydantic v2 Data Transfer Objects (DTOs)
 │   │   │   │   ├── events.py        # SSE streaming event models (TokenEvent, StepEvent, etc.)
 │   │   │   │   ├── response.py      # Standardized API response envelopes
 │   │   │   │   └── tasks.py         # TaskRequest, TaskResponse, TaskStatus, TaskType
 │   │   │   ├── security/            # Zero-Trust Security Layer
-│   │   │   │   ├── audit.py         # Immutable SHA-256 JSONL audit logger (data/audit.jsonl)
+│   │   │   │   ├── audit.py         # Tamper-evident Ed25519 digital signature JSONL audit logger
 │   │   │   │   ├── network.py       # Egress network guard & loopback firewall verification
 │   │   │   │   └── policy.py        # Role-based action policies
 │   │   │   ├── tools/               # Agent Execution Tools
 │   │   │   │   ├── calculator.py    # High-precision deterministic calculation tool
 │   │   │   │   ├── document_tool.py # DOCX and PDF document search tools
-│   │   │   │   └── file_tool.py     # Sandboxed file reader and writer
-│   │   │   └── vision/              # Computer Vision & Document OCR
+│   │   │   │   └── file_tool.py     # Sandboxed file reader/writer with strict realpath jailing
+│   │   │   └── vision/              # Computer Vision & Multimodal Middleware
 │   │   │       ├── image.py         # Image preprocessing and enhancement
+│   │   │       ├── middleware.py    # Multimodal vision middleware (Pillow downscale & base64 injection)
 │   │   │       ├── ocr.py           # Tesseract OCR engine with fallback
 │   │   │       └── pdf.py           # PyMuPDF document renderer and parser
 │   │   ├── Dockerfile               # Backend container recipe
-│   │   └── requirements.txt         # Fully pinned Python dependencies (3.10–3.13)
+│   │   └── requirements.txt         # Fully pinned Python dependencies with cryptography
 │   └── frontend/                    # UI Application (React 19 + TypeScript + Vite)
 │       ├── src/
+│       │   ├── components/          # UI Components (ChatFeed, MessageItem, CitationsTab, etc.)
+│       │   ├── hooks/               # Throttled SSE streaming hooks (useTaskStream via RAF)
+│       │   ├── types/               # TypeScript contracts (Task, Knowledge, Citations)
 │       │   ├── App.tsx              # Sovereign Workbench command center UI
-│       │   ├── index.css            # Dark mode glassmorphic styling & tokens
+│       │   ├── index.css            # Dark mode glassmorphic styling, highlight.js & design tokens
 │       │   └── main.tsx             # React DOM root entrypoint
 │       ├── index.html               # Frontend HTML root
-│       ├── package.json             # Locked npm dependencies (React 19, Lucide, Vite)
+│       ├── package.json             # Locked npm dependencies (Virtuoso, ReactMarkdown, etc.)
 │       ├── tsconfig.json            # Strict TypeScript configuration
 │       ├── vite.config.ts           # Vite bundler & local dev server proxy
 │       └── Dockerfile               # Production static build container
@@ -94,7 +98,8 @@ SIH 2026 (DEMO-SIH26117)/
 │   └── setup.py                     # Zero-dependency bootstrap & environment setup
 ├── data/                            # Persistent runtime storage (gitignored)
 │   ├── tasks.jsonl                  # Append-only task history
-│   └── audit.jsonl                  # Cryptographic SHA-256 audit log
+│   ├── keys/                        # Ed25519 cryptographic keypair (audit_signer.pem)
+│   └── audit.jsonl                  # Cryptographic Ed25519 signed audit log
 ├── .env.example                     # Environment blueprint & serving toggle documentation
 ├── .gitignore                       # Clean Python, Node, data, cache, and IDE ignore rules
 ├── brain.md                         # Blueprint, architecture log, and knowledge base
@@ -215,6 +220,41 @@ To support heterogeneous team hardware with **zero code modifications**, three s
 - **SSE Pydantic v2 Serialization Fix:** Hardened `apps/backend/app/schemas/events.py` and task streaming so `CompletionEvent` safely serializes Pydantic objects and string enums without serialization crashes.
 - **Frontend CSS Compatibility:** Updated `apps/frontend/src/index.css` to define standard `background-clip: text;` alongside `-webkit-background-clip: text;` for full W3C compliance and linter adherence.
 - **Comprehensive Git Hygiene:** Expanded `.gitignore` with comprehensive rules ignoring data directories, logs, caches, SQLite/Qdrant databases, and frontend artifacts.
+
+### Phase 11: Security Hardening, Agent Critic Loop, Vision Middleware & UI Performance
+- **Elimination of Insecure Sandbox Fallbacks:**
+  - Removed insecure `sys.executable -I` host fallback from `apps/backend/app/sandbox/docker_runner.py`.
+  - Added Linux `bwrap` (bubblewrap) containerless execution harness.
+  - Implemented fail-secure enforcement (`RuntimeError: Docker execution environment unavailable and host isolation unsupported`) to prevent host execution escapes.
+  - Added `check_sandbox_backend()` returning active backend metadata (`docker`, `bubblewrap`, or `none`).
+- **Strict Path Traversal & Symlink Jail:**
+  - Hardened `apps/backend/app/tools/file_tool.py` using canonical `os.path.realpath()`, `os.path.normcase()`, and `os.path.commonpath()`.
+  - All read/write file operations are strictly jailed to whitelisted base directories (`data/`, `uploads/`, `tmp/`).
+  - Blocks null byte injection (`\0`), traversal markers (`..`), and symlink escapes targeting outside sensitive directories.
+- **Ed25519 Cryptographic Digital Signatures in Audit:**
+  - Implemented `AuditSigner` in `apps/backend/app/security/audit.py` using `cryptography.hazmat.primitives.asymmetric.ed25519`.
+  - Generates and persists Ed25519 private key at `data/keys/audit_signer.pem`.
+  - Canonically serializes each JSONL record (`sort_keys=True`) and signs the canonical bytes.
+  - Embeds `signature` (hex) and `public_key` (hex) in every log entry for non-repudiation and cryptographic tamper evidence.
+  - Added `verify_entry()` and `verify_log_file()` utility functions for real-time and batch tamper detection.
+  - Adjusted `query_log` ordering to return newest entries first.
+- **Docker Swap Ceiling Hardening:**
+  - Added `disable_swap: bool = True` in `apps/backend/app/sandbox/limits.py`.
+  - Emits `--memory-swap={memory_mb}m`, strictly preventing Linux swap allocation and enforcing an inviolable memory ceiling.
+- **Agent Graph Tool-Call Bundling & Critic Loop:**
+  - Refactored `apps/backend/app/agent/graph.py` to prevent context window pollution: multiple tool calls generated in a single reasoning step are appended as a single assistant message containing the array of `tool_calls`, followed by corresponding `role: "tool"` observation messages.
+  - Implemented `_evaluate_with_critic()` self-correction loop in `graph.py` before finalizing completion. Evaluates candidate response against user instructions and tool outputs; if inaccuracies or missing details are detected, injects structured feedback back into the reasoning loop.
+- **Multimodal Vision Middleware:**
+  - Created `apps/backend/app/vision/middleware.py`: Detects image attachments (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`), safeguards against decompression bombs (`Image.MAX_IMAGE_PIXELS`), converts RGBA to RGB with clean background compositing, downscales using Lanczos resampling (max 1024px), compresses to JPEG (quality 80) via Pillow, and formats base64 data URIs.
+  - Added `attachment_path` to `TaskCreate` schema and wired preprocessing into `tasks.py` before task pipeline dispatch.
+- **Frontend Streaming Performance & Virtualization:**
+  - Migrated SSE handling in `apps/frontend/src/hooks/useTaskStream.ts` to `@microsoft/fetch-event-source` with robust line-buffering and error handling.
+  - Implemented `requestAnimationFrame` token and reasoning batching (flushing every ~60ms) using `tokenBufferRef` and `reasoningBufferRef` to eliminate browser DOM reflow thrashing during high-speed generation.
+  - Replaced unvirtualized chat message list in `apps/frontend/src/components/chat/ChatFeed.tsx` with `<Virtuoso>` from `react-virtuoso` with `followOutput="auto"`.
+  - Integrated `react-markdown` with `rehype-highlight`, `highlight.js/styles/github-dark.css`, and `remark-gfm` in `apps/frontend/src/components/chat/MessageItem.tsx` for syntax-highlighted code blocks, copy actions, direct sandbox execution, tables, and inline code formatting.
+- **Glass Box RAG Inspector UI:**
+  - Created `apps/frontend/src/components/inspector/CitationsTab.tsx` with dual-engine score visualizer: Vector Similarity score bar, BM25 Keyword score bar, and combined RRF Score badge ($k=60$).
+  - Registered `CitationsTab` in `InspectorDrawer.tsx` allowing analysts to inspect document citations, chunk page numbers, indexes, and raw text evidence excerpts.
 
 ---
 
@@ -357,24 +397,38 @@ python scripts/network_check.py
 
 The frontend is a modern dark-mode command center located in `apps/frontend/` built with **React 19**, **TypeScript**, and **Vite**:
 
-1. **Native SSE Token Parser:** Uses `ReadableStream` and `TextDecoder` to parse streaming server-sent events (`token`, `thinking`, `step`, `status`, `completion`, `error`) without external SSE library overhead.
-2. **Collapsible Thinking Accordion:** Automatically segregates model reasoning traces (`<think>...</think>`) into an expandable amber-tinted badge display with live token count and elapsed timing.
-3. **Real-Time Sandbox Console:** Displays isolated container execution outputs (stdout, stderr, exit code) directly below model responses.
-4. **Execution Mode Selectors:** Interactive pills for switching between `general`, `rag`, `agent`, `vision`, `document`, and `sandbox` modes.
-5. **Quick Starter Prompts:** Curated scenarios for sovereign audit, air-gapped code analysis, system diagnostics, and financial calculations.
-6. **Glassmorphic Theme:** Curated palette (deep navy `#0B0F19`, surface `#111827`, border `#1F2937`, accents `#38BDF8` & `#F59E0B`) with standard CSS compatibility.
+1. **Line-Buffered SSE Client (`@microsoft/fetch-event-source`):** Migrated in `useTaskStream.ts` for rock-solid stream management, line-buffering, and connection recovery without silent disconnects.
+2. **`requestAnimationFrame` Token Batching (~60ms):** Employs dual memory buffers (`tokenBufferRef` and `reasoningBufferRef`) flushed on standard 60Hz animation frames. Completely prevents React re-render thrashing and browser main-thread locking during high-speed LLM generation.
+3. **Virtualized Chat Feed (`react-virtuoso`):** Replaces unvirtualized arrays in `ChatFeed.tsx` with `<Virtuoso>`, rendering only messages within the viewport plus an overscan window, featuring smooth pinned autoscrolling (`followOutput="auto"`).
+4. **Rich Markdown & Syntax Highlighting:** Integrated `react-markdown` with `rehype-highlight` (`github-dark.css`) and `remark-gfm` in `MessageItem.tsx`. Features structured tables, inline pills, and custom `CodeBlock` components with "Run in Sandbox" and "Copy" actions.
+5. **Glass Box RAG Citations Inspector:** Dedicated `CitationsTab.tsx` inside `InspectorDrawer.tsx` visualizing hybrid retrieval internals:
+   - Vector Cosine Similarity progress bar (emerald)
+   - BM25 Keyword Matching score bar (cyan)
+   - Combined Reciprocal Rank Fusion (RRF) score badge ($k=60$)
+   - Source document filename, chunk index, page number, and full text evidence excerpt
+6. **Collapsible Thinking Accordion:** Automatically segregates model reasoning traces (`<think>...</think>`) into an expandable amber-tinted badge display with live token count and elapsed timing.
+7. **Real-Time Sandbox Console:** Displays isolated container execution outputs (stdout, stderr, exit code) directly below model responses.
+8. **Glassmorphic Theme:** Curated palette (deep navy `#0B0F19`, surface `#111827`, border `#1F2937`, accents `#38BDF8` & `#F59E0B`) with standard CSS compatibility.
 
 ---
 
 ## 9. Security, Zero-Egress & Immutable Audit
 
-1. **Air-Gap Egress Blocking:** Backend `EgressGuard` restricts socket connections to loopback and private subnets. Egress attempts trigger automated security alerts.
-2. **Cryptographic Audit Trail:** All task requests, tool executions, and model responses are logged to `data/audit.jsonl` with SHA-256 hashes, timestamps, and execution metadata.
-3. **Strict Container Sandbox:** Code execution runs inside temporary Docker containers configured with:
-   - `--network=none` (Zero network access)
-   - `--memory=256m` (Strict memory ceiling)
-   - `--pids-limit=64` (Fork bomb prevention)
-   - `--read-only` (Immutable root filesystem with temporary scratch volume)
+1. **Air-Gap Egress Blocking:** Backend `EgressGuard` restricts socket connections strictly to loopback and authorized private subnets. Egress attempts trigger automated alerts and rejection.
+2. **Ed25519 Cryptographic Signatures for Audit Trails:**
+   - Every log record in `data/audit.jsonl` is canonically serialized (`sort_keys=True`) and signed with an Ed25519 private key (`data/keys/audit_signer.pem`).
+   - Every entry contains `signature` (hex), `public_key` (hex), and SHA-256 prompt/output hashes.
+   - Any log tampering, truncation, or forgery is immediately detectable via `verify_entry()` or batch `verify_log_file()`.
+3. **Strict Path Traversal & Symlink Defense:**
+   - `apps/backend/app/tools/file_tool.py` uses `os.path.realpath()`, `os.path.normcase()`, and `os.path.commonpath()` to guarantee all read/write paths resolve inside allowed roots (`data/`, `uploads/`, `tmp/`).
+   - Rejects null bytes (`\0`), traversal sequences (`..`), and symlink escapes targeting system directories.
+4. **Strict Container Sandbox & Fail-Secure Execution:**
+   - Code execution runs inside temporary Docker containers configured with:
+     - `--network=none` (Zero network access)
+     - `--memory=256m` and `--memory-swap=256m` (Zero swap allocation)
+     - `--pids-limit=64` (Fork bomb prevention)
+     - `--read-only` (Immutable root filesystem with temporary scratch volume)
+   - Insecure host fallback (`sys.executable -I`) has been permanently eliminated. If Docker is unavailable, the runner attempts Linux `bwrap` (bubblewrap) or terminates fail-securely with `RuntimeError`.
 
 ---
 
@@ -383,11 +437,14 @@ The frontend is a modern dark-mode command center located in `apps/frontend/` bu
 | Component | Test / Verification Method | Status |
 | :--- | :--- | :--- |
 | **Backend Python Code** | `python -m py_compile` across all modules | **Passed** (0 syntax errors) |
-| **Dependency Resolution** | `pip install --dry-run -r requirements.txt` | **Passed** (Clean lock) |
+| **Dependency Resolution** | `pip install --dry-run -r requirements.txt` + `cryptography` | **Passed** (Clean lock) |
 | **Model Serving Engine** | Universal OpenAI-compatible client + streaming + `<think>` parser | **Passed** (Ollama, MLX, vLLM) |
 | **Hybrid RAG Pipeline** | Qdrant dense vector search + BM25Okapi sparse RRF | **Passed** (Empty fallback safe) |
-| **Agent State Machine** | Graph step loop, tool execution (`calc`, `doc`, `file`, `sandbox`) | **Passed** |
-| **Docker Sandbox** | Code extraction, driver synthesis, isolation flags, safe fallback | **Passed** |
-| **SSE Event Pipeline** | Streaming tokens, steps, thinking trace, Pydantic v2 completion | **Passed** |
-| **Frontend UI Build** | React 19 + TypeScript + Vite build & CSS validation | **Passed** |
+| **Agent State Machine & Critic** | Graph step loop, tool bundling (single assistant turn), Critic verification | **Passed** |
+| **Docker Sandbox Isolation** | Code synthesis, `--memory-swap=256m`, Linux `bwrap`, fail-secure fallback | **Passed** |
+| **File Tool Path Traversal** | Canonical `realpath` checks, symlink escapes, parent directory traversal | **Passed** (All exploits blocked) |
+| **Ed25519 Cryptographic Audit** | Signature generation, verification, and byte-level tamper detection | **Passed** |
+| **Multimodal Vision Pipeline** | Pillow downscale (1024px), RGBA->RGB, JPEG 80 compression, Base64 URI | **Passed** |
+| **SSE Event & UI Throttling** | `@microsoft/fetch-event-source` + `requestAnimationFrame` 60ms batching | **Passed** |
+| **Frontend UI Build** | React 19 + TypeScript + Vite (`npm run build`) | **Passed** (0 TS/Vite errors) |
 | **Operational Tooling** | `setup.py`, `health_check.py`, `network_check.py` | **Passed** |

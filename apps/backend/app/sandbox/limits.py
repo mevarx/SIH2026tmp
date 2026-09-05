@@ -47,6 +47,14 @@ class SandboxLimits(BaseModel):
         default=True,
         description="Automatically remove the container after exit",
     )
+    disable_swap: bool = Field(
+        default=True,
+        description="Explicitly disable container swap by setting --memory-swap equal to memory limit",
+    )
+    memory_swap_mb: Optional[int] = Field(
+        default=None,
+        description="Optional custom memory-swap limit in MB (set to -1 for unlimited, or equal to memory_mb for 0 swap)",
+    )
     docker_image: str = Field(
         default="python:3.11-slim",
         description="Base Docker image for code execution",
@@ -60,9 +68,19 @@ class SandboxLimits(BaseModel):
         """
         args: List[str] = []
 
-        # Memory limit
+        # Memory and swap limits
         args.append(f"--memory={self.memory_mb}m")
-        args.append(f"--memory-swap={self.memory_mb}m")  # No swap
+
+        # Docker Engine swap configuration:
+        # In Docker, setting --memory-swap equal to --memory explicitly disables swap (swap = 0).
+        # Setting --memory-swap to -1 allows unlimited swap.
+        if self.disable_swap:
+            args.append(f"--memory-swap={self.memory_mb}m")
+        elif self.memory_swap_mb is not None:
+            if self.memory_swap_mb == -1:
+                args.append("--memory-swap=-1")
+            else:
+                args.append(f"--memory-swap={self.memory_swap_mb}m")
 
         # CPU limit
         args.append(f"--cpus={self.cpu_limit}")
